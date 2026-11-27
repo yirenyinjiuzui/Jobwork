@@ -209,12 +209,13 @@ function precisionLabel(record,key){
   return '';
 }
 function stamp(record,key,label){return record[key]?label+' '+niceDate(record[key])+precisionLabel(record,key):'';}
+function deadlineStamp(a){return a.status==='interview'?stamp(a,'interview_reply_by','面试回复截止'):stamp(a,'deadline','截止');}
 function calendarContents(a){
   const l=calendarLink(a);return l?[l,paragraph('导出 .ics 文件，不自动同步。','subtle')]:[];
 }
 function calendarLink(a){
   if(!/^[1-9]\d*$/.test(String(a.id)))return null;
-  if(!((['saved','assessment','interview','offer'].includes(a.status)&&a.deadline)||(a.status==='interview'&&a.interview_at)))return null;
+  if(!((['saved','assessment','offer'].includes(a.status)&&a.deadline)||(a.status==='interview'&&(a.interview_at||a.interview_reply_by))))return null;
   const l=link('导出日历 (.ics)','/api/calendar?id='+encodeURIComponent(a.id),'btn small');
   l.removeAttribute('target');l.title='下载文件，不自动同步日历';return l;
 }
@@ -252,7 +253,7 @@ function dashboard(){
   const taskRows=todos.slice(0,8).map(a=>{
     const why=typeof a.reason==='string'?a.reason:'';
     const target=a.next_action||({assessment:'查看网测要求',interview:'准备面试',saved:'决定是否投递'}[a.status]||'查看进展');
-    return row([node('strong','',target),shortMeta(a.company,a.title),shortMeta(why||null,stamp(a,'deadline','截止'),stamp(a,'interview_at','面试')),badge(statusName(a.status),a.status)],calendarLink(a),btn('看记录',()=>goTrack(a),'small'));
+    return row([node('strong','',target),shortMeta(a.company,a.title),shortMeta(why||null,deadlineStamp(a),stamp(a,'interview_at','面试')),badge(statusName(a.status),a.status)],calendarLink(a),btn('看记录',()=>goTrack(a),'small'));
   });
   const alertRows=state.notifications.slice(0,12).map(n=>row([node('strong','',n.title||'岗位更新'),n.read?null:' ',n.read?null:badge('新','active'),n.body?paragraph(n.body,'meta'):null,shortMeta(n.created_at?niceDate(n.created_at):'')],link('原始入口',n.url,'btn small'),n.read?null:btn('标为已读',()=>mutate('/api/notifications/read',{id:n.id},'已标为已读。'),'small')));
   return [head('工作台 / 01','今天先做什么','开招、网测、面试与下一步放在同一个地方。',[btn('+ 记一笔投递',()=>{currentEdit=null;goTrack(null);queueMicrotask(()=>qs('#editor')?.scrollIntoView());},'primary')]),counts,node('div','grid',card('优先处理',paragraph('根据记录里的日期和当前状态安排，等回复的岗位无需反复翻查。','meta'),taskRows.length?list(taskRows):empty('暂无需要处理的事项。添加投递记录，或导入一封网测、面试通知。'),todos.length>8?paragraph('其余记录可在投递追踪查看。','subtle'):null),card('岗位提醒',paragraph('首次成功检查只建立基线，以后发现新岗位或重新开放时，会在这里提示。启动本机程序后才会轮询。','meta'),typeof Notification!=='undefined'&&!desktopAlerts?btn('开启桌面提醒（本页）',enableDesktopAlerts,'small'):null,alertRows.length?list(alertRows):empty('还没有开招提醒。请先在「公司与岗位」添加招聘来源。'),unread.length?node('div','actions',btn('全部标为已读',()=>mutate('/api/notifications/read',{},'已标记全部提醒为已读。'),'small')):null)),state.applications.length===0?card('先试用模拟数据',paragraph('不会读取真实邮箱，也不会联系招聘方。'),btn('载入演示记录',()=>mutate('/api/demo',{},'演示记录已加载。'))):null];
@@ -366,12 +367,23 @@ function tracking(){
       field('app','career_type','岗位类型',{kind:'select',value:a.career_type||'other',options:Object.entries(typeLabels)}),
       field('app','status','当前状态',{kind:'select',value:a.status||'saved',options:Object.entries(statusLabels)}),
       field('app','submitted_at','实际投递时间（香港，可留空）',{value:fieldDate(a.submitted_at),placeholder:'2026-11-01 10:00',hint:'填写实际提交申请的时间；不是录入时间或面试时间。不确定请留空。'}),
-      field('app','deadline','截止时间（香港）',{value:fieldDate(a.deadline),placeholder:'2026-12-01 或 2026-12-01 18:00'}),
+      field('app','deadline','申请或其他流程截止（香港）',{value:fieldDate(a.deadline),placeholder:'2026-12-01 或 2026-12-01 18:00',hint:a.status==='interview'&&a.deadline?'原截止保留供核对。如果招聘方要求限时回复，请填写面试回复期限。':''}),
       field('app','interview_at','面试时间（香港）',{value:fieldDate(a.interview_at),placeholder:'2026-12-01 18:00'}),
+      field('app','interview_reply_by','面试回复期限（香港，可留空）',{value:fieldDate(a.interview_reply_by),placeholder:'2026-12-01 或 2026-12-01 18:00'}),
       field('app','resume_label','实际使用的简历版本',{value:a.resume_label,full:true,placeholder:'例如：英文简历 v3',hint:resumeExamples.length?'资料库版本：'+resumeExamples.join('、'):'只记版本名，不上传文件。'}),
       field('app','next_action','下一步',{value:a.next_action,full:true,placeholder:'例如：完成网测；等待回复'}),
       field('app','source_url','来源链接',{kind:'url',value:a.source_url,full:true,placeholder:'https://…'})),
-      f=>{const d=actualData(f);if(a.id){d.id=a.id;for(const k of ['deadline','interview_at','submitted_at']){if(d[k]===fieldDate(a[k]))delete d[k];}}return mutate('/api/application',d,'投递记录已保存。',r=>{currentEdit=r.application?.id||r.id||a.id||null;});},a.id?'保存修改':'添加记录',
+      f=>{
+        const d=actualData(f);
+        if(a.id){
+          d.id=a.id;
+          const saved=state.applications.find(row=>equalId(row.id,a.id))||a;
+          for(const k of ['deadline','interview_at','interview_reply_by','submitted_at']){
+            if(d[k]===fieldDate(saved[k]))delete d[k];
+          }
+        }
+        return mutate('/api/application',d,'投递记录已保存。',r=>{currentEdit=r.application?.id||r.id||a.id||null;});
+      },a.id?'保存修改':'添加记录',
       a.id?[btn('切换到新增',()=>{currentEdit=null;render();qs('#app-company')?.focus();})]:[]),
     editorCalendar,
     a.id?historyDetails(a):null);
@@ -389,7 +401,7 @@ function renderApplications(target){
   target.append(list(rows.slice(0,150).map(a=>row([node('strong','',a.title),' ',badge(statusName(a.status),a.status),
     shortMeta(a.company,a.location,a.requisition?'编号 '+a.requisition:null,a.resume_label?'简历 '+a.resume_label:null),
     a.assessment_tasks?.length?details('各测评状态',list(a.assessment_tasks.map(t=>paragraph(t.id+'：'+(t.completed?'已完成，等待结果':'待完成')+(t.deadline?' · '+t.deadline+' · '+(t.precision==='estimated'?'估算':'原记录时间'):''),'meta')))):null,
-    shortMeta(a.next_action,stamp(a,'deadline','截止'),stamp(a,'interview_at','面试'))],
+    shortMeta(a.next_action,deadlineStamp(a),stamp(a,'interview_at','面试'))],
     link('来源',a.source_url,'btn small'),calendarLink(a),editApplicationButton(a)))));
 }
 function editApplicationButton(a){
@@ -416,6 +428,8 @@ function applicationBoard(applications,target){
           if(equalId(currentEdit,a.id)){
             const statusSelect=qs('#app-status');
             if(statusSelect?.value===a.status)statusSelect.value=updated?.status||next;
+            const reply=qs('#app-interview_reply_by');
+            if(updated&&reply?.value===fieldDate(a.interview_reply_by))reply.value=fieldDate(updated.interview_reply_by);
             qs('#editor-calendar')?.replaceChildren(...calendarContents(updated||{...a,status:next}));
           }
           renderApplications(target);
@@ -427,7 +441,7 @@ function applicationBoard(applications,target){
       select.addEventListener('change',()=>{update.disabled=select.value===a.status;});
       return node('li','board-item',node('strong','board-title',a.title),shortMeta(a.company,a.location,a.requisition,a.resume_label?'简历 '+a.resume_label:null),
         a.assessment_tasks?.length?details('各测评状态',list(a.assessment_tasks.map(t=>paragraph(t.id+'：'+(t.completed?'已完成，等待结果':'待完成')+(t.deadline?' · '+t.deadline+' · '+(t.precision==='estimated'?'估算':'原记录时间'):''),'meta')))):null,
-    shortMeta(a.next_action,stamp(a,'deadline','截止'),stamp(a,'interview_at','面试')),
+    shortMeta(a.next_action,deadlineStamp(a),stamp(a,'interview_at','面试')),
         node('div','actions',editApplicationButton(a),calendarLink(a)),node('div','board-update',changeStatus,update));
     })):paragraph('暂无记录','board-empty'));
     run.setAttribute('aria-labelledby',title.id);return run;
@@ -488,7 +502,7 @@ function renderPreview({token,notice:n,match:m}){
   const selection=exact&&!m?.ambiguous?String(exact.id):'';
   const title=node('h3','','确认本次导入');title.tabIndex=-1;
   const warning=[...(Array.isArray(n.warnings)?n.warnings:[]),m?.ambiguous?(m.reason||'匹配不明确，必须由你复核。'):!selection?'没有自动关联，请核对要写入的岗位。':''].filter(Boolean);
-  const oldVals={company:plain(n.company),title:plain(n.title),requisition:plain(n.requisition),status:n.has_explicit_status===false?'':plain(n.status),deadline:fieldDate(n.deadline),interview_at:fieldDate(n.interview_at),next_action:plain(n.next_action)};
+  const oldVals={company:plain(n.company),title:plain(n.title),requisition:plain(n.requisition),status:n.has_explicit_status===false?'':plain(n.status),deadline:fieldDate(n.deadline),interview_at:fieldDate(n.interview_at),interview_reply_by:fieldDate(n.interview_reply_by),next_action:plain(n.next_action)};
   return node('section','details',title,
     paragraph(exact?'建议关联：'+exact.company+' / '+exact.title:'当前没有自动匹配。','meta'),
     shortMeta(({high:'提取置信度：高',medium:'提取置信度：中',low:'提取置信度：低'})[n.confidence],n.received_at?'通知发送时间 '+niceDate(n.received_at):''),
@@ -502,8 +516,9 @@ function renderPreview({token,notice:n,match:m}){
       field('review','title','提取到的岗位',{value:oldVals.title}),
       field('review','requisition','提取到的编号',{value:oldVals.requisition}),
       field('review','status','本次状态',{kind:'select',value:oldVals.status,options:[['','不变更'],...Object.entries(statusLabels)]}),
-      field('review','deadline','本次截止时间（香港）',{value:oldVals.deadline,hint:precisionLabel(n,'deadline')}),
+      field('review','deadline','申请或其他流程截止（香港）',{value:oldVals.deadline,hint:precisionLabel(n,'deadline')}),
       field('review','interview_at','本次面试时间（香港）',{value:oldVals.interview_at,hint:precisionLabel(n,'interview_at')}),
+      field('review','interview_reply_by','本次面试回复期限（香港）',{value:oldVals.interview_reply_by,hint:precisionLabel(n,'interview_reply_by')}),
       field('review','next_action','本次下一步',{value:oldVals.next_action,full:true}),
       n.assessment_completion_confirmation_required?field('review','assessment_completion_confirmed','确认仅完成测评 '+(n.assessment_id||'（未知，不能清除待办）'),{kind:'checkbox',value:'yes',full:true}):null,
       n.assessment_confirmation_required?field('review','same_assessment_confirmed','已核实来源与发送时间，并确认本通知属于同一测评 '+(n.assessment_id||'（编号未知，不能自动改截止）'),{kind:'checkbox',value:'yes',full:true,hint:'仅推算截止；未知编号或原测评不一致时只能复核留历史。'}):null,

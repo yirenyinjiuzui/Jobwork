@@ -1,7 +1,7 @@
 from email.message import EmailMessage
 import unittest
 
-from tracker import parse_notice, parse_eml, match_application, apply_notice
+from tracker import parse_notice, parse_eml, parse_eml_notice, match_application, apply_notice
 
 
 PREFIX = 'Company: Example Labs\nRole: Software Intern\nJob ID: JR-123456\n'
@@ -41,7 +41,20 @@ class NoticeTests(unittest.TestCase):
     def test_distinguishes_interview_and_reply_due_date(self):
         notice = self.parse('Interview is scheduled for 23 Nov 2026 14:00 HKT. Please reply by 21 Nov 2026 17:00 HKT.')
         self.assertEqual(notice['interview_at'], '2026-11-23T14:00+08:00')
-        self.assertEqual(notice['deadline'], '2026-11-21T17:00+08:00')
+        self.assertEqual(notice['interview_reply_by'], '2026-11-21T17:00+08:00')
+        self.assertFalse(notice['deadline'])
+
+    def test_only_explicit_reply_deadlines_belong_to_an_interview(self):
+        notice = self.parse('面试通知：请于 2026-11-29 15:00 香港时间参加面试，请于 2026-11-28 前回复是否出席。')
+        self.assertEqual((notice['interview_at'],notice['interview_reply_by']),('2026-11-29T15:00+08:00','2026-11-28'))
+        for extra in ('Application deadline: 2026-11-25.', 'Deadline: 2026-11-25.', 'We will respond by 2026-11-25.'):
+            notice = self.parse('Interview invitation. Date/Time: 2026-11-29. '+extra)
+            self.assertEqual(notice['interview_at'],'2026-11-29')
+            self.assertFalse(notice['interview_reply_by'])
+        reminder=self.parse('请于 2026-11-28 前确认是否参加面试。')
+        self.assertEqual((reminder['status'],reminder['interview_reply_by']),('interview','2026-11-28'))
+        combined=self.parse('Interview invitation. Application deadline: 2026-11-25. Please reply by 2026-11-28. Date/Time: 2026-11-29.')
+        self.assertEqual((combined['deadline'],combined['interview_reply_by'],combined['interview_at']),('2026-11-25','2026-11-28','2026-11-29'))
 
     def test_relative_extension_overrides_original_deadline(self):
         old = self.parse('Online assessment deadline 2026-11-19 09:00 HKT', '2026-11-16T12:00:00+08:00')
@@ -108,6 +121,15 @@ class MatchTests(unittest.TestCase):
 
 
 class EmlTests(unittest.TestCase):
+    def test_interview_subject_and_body_reply_deadline(self):
+        msg = EmailMessage()
+        msg['Subject'] = 'Interview invitation'
+        msg.set_content(PREFIX + 'Please reply by 2026-11-28.')
+        notice = parse_eml_notice(parse_eml(msg.as_bytes()))
+        self.assertEqual(notice['interview_reply_by'], '2026-11-28')
+        self.assertFalse(notice['deadline'])
+        self.assertFalse(notice['interview_at'])
+
     def test_html_mail_stripped_and_sender_date_converted(self):
         eml = EmailMessage()
         eml['Subject'] = 'Interview confirmation'

@@ -46,6 +46,8 @@ _RELATIVE = re.compile(
     r'(?P<n2>\d{1,3})\s*(?P<u2>小[时時]|[个個]?工作[日天]|天|日)\s*(?:内|內|之[内內]))', re.I)
 _DEADLINE = re.compile(r'deadline|due(?:\s+(?:by|on|at))?|no later than|(?:complete|submit|respond|reply|finish)\b[^.\n]{0,80}\b(?:by|before|within)\b|closes?|expires?|cutoff|cut-off|截止|最[晚遲迟]|限期|[内內]完成|延[期至长長]|須於|须于|請於|请于', re.I)
 _EVENT = re.compile(r'interview|面[试試]|date\s*/\s*time|面談|面谈', re.I)
+_APPLICATION_LIMIT = re.compile(r'\bapplications?\s+(?:deadline|clos(?:e[sd]?|ing date))|(?:申请|申請|投递|投遞|报名|報名)(?:的)?截止', re.I)
+_REPLY_LIMIT = re.compile(r'\b(?:reply|respond|response|rsvp|confirm(?:ation)?)\b.{0,55}?\b(?:by|before|within|deadline|due|no later than)\b|\brsvp\s*[:：]|(?:回复|答复|回覆|答覆|确认|確認).{0,12}?(?:截止|期限|限期|最晚|最迟|最遲)', re.I)
 _CANCELLED = re.compile(r'interview\s+(?:(?:has been|was|is)\s+)?cancel(?:led|ed)|已取消.{0,15}面[试試]|面[试試].{0,15}已取消', re.I)
 _NOT_OLD = re.compile(r'previous(?:ly)?|original(?:ly)?|formerly|old (?:time|date)|原定|原时间|原時間|旧时|舊時', re.I)
 _NEW = re.compile(r'rescheduled\s*(?:to|for)|new\s+(?:time|date|deadline)|updated\s+(?:time|date|deadline)|extended\s+to|改[为為到至]|新(?:时间|時間|日期|截止)|延期至|延長至|延长至|调整[至到为]|調整[至到為]', re.I)
@@ -123,6 +125,8 @@ def _status(text):
         return 'offer', True, 'high'
     if _CANCELLED.search(text):
         return 'interview', True, 'medium'
+    if re.search(r'面[试試](?:回复|回覆|答复|答覆)(?:截止|期限)|(?:回复|回覆|[确確][认認])(?:是否|能否)?(?:参加|參加|出席)(?:本次)?面[试試]|\binterview (?:rsvp|reply deadline|response deadline)\b', text, re.I):
+        return 'interview', True, 'high'
     if re.search(r'interview (?:invitation|confirm(?:ation|ed)|reschedul\w+|(?:has been|was|is)\s+(?:rescheduled|scheduled|confirmed))|(?:reschedul\w+|confirm\w+|invit\w+|join|attend|schedule\w*)[^.!。\n]{0,95}\binterview\b|(?:Date\s*/\s*Time|interviewer)\s*[:：]|面[试試](?:通[知告]|邀请|邀請|安排|改期|确认|確認|时间|時間)|邀[请請][^。]{0,30}面[试試]|面談通知', text, re.I):
         return 'interview', True, 'high'
     if _completed(text):
@@ -233,9 +237,26 @@ def _date_hits(line, received):
     return sorted(hits)
 
 
+def _interview_date_field(before, after, fallback):
+    # Only associate the date with instructions in its own clause.
+    lead = re.split(r'[。；;,，!?！？\n]|\.\s+', before)[-1]
+    tail = re.split(r'[。；;!?！？\n]|\.\s+', after, maxsplit=1)[0].strip()
+    tail = re.sub(r'^[（(]?(?:HKT|(?:香港|北京)(?:时间|時間))[)）]?\s*', '', tail, flags=re.I)
+    if _APPLICATION_LIMIT.search(lead):
+        return 'deadline'
+    reply_after = re.match(r'(?:之?前|以?内|以?內)?\s*(?:回复|答复|回覆|答覆|确认|確認)', tail)
+    if _REPLY_LIMIT.search(lead) or (reply_after and re.search(r'请[在于於]|請[在于於]|最[迟遲晚]|前|内|內', lead + tail)):
+        if re.search(r"\bwe(?:\s+will|['’]ll)\b|\b(?:need not|no need to|do not|don['’]t|not required to)\b|(?:我们|我們|我方|招聘方)[将將会會]|无需|無需|不必|请勿|請勿", lead, re.I):
+            return None
+        return 'interview_reply_by'
+    if re.match(r'(?:参加|參加|出席)面[试試]', tail):
+        return 'interview_at'
+    return None if fallback == 'deadline' else fallback
+
+
 def _date_candidates(text, status, received):
     warnings = []
-    by_field = {'deadline': [], 'interview_at': []}
+    by_field = {'deadline': [], 'interview_at': [], 'interview_reply_by': []}
     lines = text.splitlines()
     for i, line in enumerate(lines):
         line = line.strip()
@@ -247,7 +268,7 @@ def _date_candidates(text, status, received):
         deadline = bool(_DEADLINE.search(context))
         event = bool(_EVENT.search(context)) or (status == 'interview' and bool(re.search(r'(?:new |updated )?(?:date|time|日期|时间|時間)\s*[:：]', context, re.I)))
         hits = _date_hits(line, received)
-        for start, _, value, precision, note in hits:
+        for pos, (start, end, value, precision, note) in enumerate(hits):
             prefix = line[:start]
             nearest_new = list(_NEW.finditer(prefix))
             nearest_old = list(_NOT_OLD.finditer(prefix))
@@ -268,10 +289,22 @@ def _date_candidates(text, status, received):
                 field = 'interview_at'
             else:
                 field = 'deadline' if deadline else 'interview_at' if event and status == 'interview' else None
+            if status == 'interview':
+                lead = line[hits[pos-1][1]:start] if pos else prefix
+                # Some templates put the reply label on a separate line.
+                if not lead.strip() and not pos and not _date_hits(prev, received):
+                    lead = prev
+                tail = line[end:hits[pos+1][0]] if pos+1<len(hits) else line[end:]
+                field = _interview_date_field(lead, tail, field)
             if field:
                 by_field[field].append((priority, value, precision, note))
     for m in _RELATIVE.finditer(text):
-        if not _DEADLINE.search(text) and status not in ('assessment', 'offer'):
+        field = 'deadline'
+        if status == 'interview':
+            field = _interview_date_field(text[max(0,m.start()-120):m.end()], text[m.end():m.end()+80], None)
+            if field not in ('interview_reply_by','deadline'):
+                continue
+        elif not _DEADLINE.search(text) and status not in ('assessment', 'offer'):
             continue
         number = _norm(m['n1'] or m['n2'])
         count = int(number) if number.isdigit() else ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'].index(number)
@@ -289,7 +322,7 @@ def _date_candidates(text, status, received):
             guessed = (received.astimezone(HKT) + timedelta(hours=count)).isoformat(timespec='minutes')
         else:
             guessed = (received.astimezone(HKT).date() + timedelta(days=count)).isoformat()
-        by_field['deadline'].append((priority, guessed, 'estimated', '按通知时间推算；属于估算，以原邮件或招聘系统为准。'))
+        by_field[field].append((priority, guessed, 'estimated', '按通知时间推算；属于估算，以原邮件或招聘系统为准。'))
     result, precisions = {}, {}
     for field, vals in by_field.items():
         # A concrete deadline outweighs a relative estimate of the same priority.
@@ -304,7 +337,7 @@ def _date_candidates(text, status, received):
         else:
             result[field], precisions[field] = '', 'unknown'
             if len(unique) > 1:
-                warnings.append('检测到多个可能的截止时间，请手动确认。' if field == 'deadline' else '检测到多个可能的面试时间，请手动确认。')
+                warnings.append('检测到多个可能的面试时间，请手动确认。' if field == 'interview_at' else '检测到多个可能的截止时间，请手动确认。')
     return result, precisions, list(dict.fromkeys(warnings))
 
 
@@ -343,7 +376,7 @@ def _parse_text(text, received_at=None, source_url='', company='', title='', req
         warnings.append('面试取消不等于流程终止；请联系招聘方核对是否另行安排。')
     # Identical notices pasted twice remain idempotent. Detect a resend of an
     # equal relative-date template as distinct only if the resolved date differs.
-    relative_key = dates.get('deadline') if _RELATIVE.search(active) else ''
+    relative_key = (dates.get('deadline') or dates.get('interview_reply_by')) if _RELATIVE.search(active) else ''
     fp = sha256(json.dumps([_norm(active), _norm(identity['company']), _norm(identity['title']),
                             _qid(identity['requisition']), relative_key], ensure_ascii=False).encode('utf-8')).hexdigest()
     return {**identity, **dates, 'status': status, 'next_action': ('确认是否还有下一轮安排' if completion else '向招聘方确认是否重新安排面试' if cancelled else STATUS_ACTION[status]) if explicit else '',
@@ -557,7 +590,13 @@ def _parse_notice_parts(parts, received_at, source_url, company, title, requisit
     chosen = next((p for p in candidates if p['has_explicit_status'] and p['status'] == status), None)
     notice = dict(chosen or _parse_text('', received_at=received_at))
     # Never borrow a date from the alternative silently when it disagrees.
-    for field in ('deadline', 'interview_at'):
+    if status == 'interview':
+        for part, candidate in zip(parts, candidates):
+            if candidate['status'] != 'interview':
+                dates, precision, warnings = _date_candidates(part['text'], status, _utc(received_at))
+                candidate.update(dates, date_precision=precision)
+                candidate['warnings'].extend(warnings)
+    for field in ('deadline', 'interview_at', 'interview_reply_by'):
         vals = {p[field] for p in candidates if p[field]}
         if len(vals) > 1:
             reasons.append('邮件各部分的日期不一致，请人工核对')
@@ -593,9 +632,9 @@ def _parse_notice_parts(parts, received_at, source_url, company, title, requisit
     notice['warnings'] = list(dict.fromkeys(reasons + [w for p in candidates for w in p['warnings'] if '岗位标识不完整' not in w and '未识别到明确的流程状态' not in w]))
     notice['notes'] = '\n'.join(notice['warnings'])
     if reasons:
-        notice.update(status='waiting', deadline='', interview_at='', next_action='', completion=False, interview_cancelled=False)
+        notice.update(status='waiting', deadline='', interview_at='', interview_reply_by='', next_action='', completion=False, interview_cancelled=False)
         notice['date_precision'] = {}
-    notice['legacy_fingerprint'] = legacy_fingerprint or sha256(json.dumps([parts, identity, notice.get('deadline')], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    notice['legacy_fingerprint'] = legacy_fingerprint or sha256(json.dumps([parts, identity, notice.get('deadline') or notice.get('interview_reply_by')], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     notice['fingerprint'] = sha256(json.dumps([notice['legacy_fingerprint'],notice.get('received_at','')]).encode()).hexdigest()
     return notice
 
@@ -688,7 +727,7 @@ def apply_notice(notice, application_or_none):
         if notice.get('next_action') or new_status == 'closed':
             out['next_action'] = notice.get('next_action', '')
     if new_status not in ('closed',) and not completion_after_assessment:
-        for key in ('deadline', 'interview_at'):
+        for key in ('deadline', 'interview_at', 'interview_reply_by'):
             if notice.get(key):
                 out[key] = notice[key]
                 precision[key] = (notice.get('date_precision') or {}).get(key, 'unknown')
@@ -698,10 +737,12 @@ def apply_notice(notice, application_or_none):
     if new_status == 'interview' and notice.get('interview_cancelled'):
         out['interview_at'] = ''
         precision.pop('interview_at', None)
+        out['interview_reply_by'] = ''
+        precision.pop('interview_reply_by', None)
     out['date_precision'] = precision
     if notice.get('source_url'):
         out['source_url'] = notice['source_url']
-    if new_time and (new_status or any(notice.get(k) for k in ('deadline','interview_at'))):
+    if new_time and (new_status or any(notice.get(k) for k in ('deadline','interview_at','interview_reply_by'))):
         out['last_notice_at'] = new_time.astimezone(HKT).isoformat(timespec='seconds')
     if notice.get('fingerprint'):
         out['last_notice_fingerprint'] = notice['fingerprint']

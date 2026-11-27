@@ -20,7 +20,7 @@ def validate_schema(db):
     with closing(sqlite3.connect(':memory:')) as reference:
         reference.executescript(SCHEMA)
         tables=[r[0] for r in reference.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-        optional={'applications':{'resume_label','submitted_at'}}
+        optional={'applications':{'resume_label','submitted_at','interview_reply_by'}}
         def unique_columns(con,table):
             return {tuple(r[2] for r in con.execute('PRAGMA index_info("'+idx[1].replace('"','""')+'")'))
                     for idx in con.execute('PRAGMA index_list("'+table+'")') if idx[2]}

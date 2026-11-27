@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
     def export(self):
         output=io.StringIO()
         writer=csv.writer(output)
-        fields=('company','title','requisition','location','career_type','status','deadline','interview_at','next_action','source_url','resume_label','updated_at')
+        fields=('company','title','requisition','location','career_type','status','deadline','interview_at','next_action','source_url','resume_label','updated_at','interview_reply_by')
         writer.writerow(fields)
         def safe_cell(value):
             value=str(value or '')
@@ -280,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
                 notice['requires_review']=True
                 notice['has_explicit_status']=False
                 notice['status']='waiting'
-                notice['deadline']=notice['interview_at']=notice['next_action']=''
+                notice['deadline']=notice['interview_at']=notice['interview_reply_by']=notice['next_action']=''
                 notice['warnings'].append(match['reason'])
                 notice['confidence']='low'
                 notice['completion']=notice['interview_cancelled']=False

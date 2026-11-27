@@ -22,7 +22,7 @@ RESUME_TEXT += [['skills', '', 'textarea'], ['self_evaluation', '', 'textarea'],
 RESUME_RECORDS = {key: primary + extra for key, _, _, primary, extra in RESUME_SCHEMA['records']}
 NEW_RESUME_GROUPS = ('family_relations', 'patents', 'publications')
 APP_FIELDS = ('company','title','requisition','location','career_type','status','deadline',
-              'interview_at','next_action','source_url','resume_label','submitted_at','last_notice_at','last_notice_fingerprint')
+              'interview_at','interview_reply_by','next_action','source_url','resume_label','submitted_at','last_notice_at','last_notice_fingerprint')
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -100,7 +100,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS applications (
  id INTEGER PRIMARY KEY, company TEXT NOT NULL, title TEXT NOT NULL, requisition TEXT NOT NULL,
  identity TEXT UNIQUE NOT NULL, location TEXT NOT NULL, career_type TEXT NOT NULL, status TEXT NOT NULL,
- deadline TEXT NOT NULL, interview_at TEXT NOT NULL, next_action TEXT NOT NULL, source_url TEXT NOT NULL, resume_label TEXT NOT NULL DEFAULT '', submitted_at TEXT NOT NULL DEFAULT '',
+ deadline TEXT NOT NULL, interview_at TEXT NOT NULL, interview_reply_by TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL, source_url TEXT NOT NULL, resume_label TEXT NOT NULL DEFAULT '', submitted_at TEXT NOT NULL DEFAULT '',
  last_notice_at TEXT NOT NULL, last_notice_fingerprint TEXT NOT NULL, date_precision TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS history (
  id INTEGER PRIMARY KEY, application_id INTEGER NOT NULL REFERENCES applications(id),
@@ -132,12 +132,42 @@ class Store:
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript(SCHEMA)
+            db.execute('BEGIN IMMEDIATE')
             if not any(row[1]=='resume_label' for row in db.execute('PRAGMA table_info(applications)')):
                 db.execute("ALTER TABLE applications ADD COLUMN resume_label TEXT NOT NULL DEFAULT ''")
             if not any(row[1]=='submitted_at' for row in db.execute('PRAGMA table_info(applications)')):
                 db.execute("ALTER TABLE applications ADD COLUMN submitted_at TEXT NOT NULL DEFAULT ''")
+            if not any(row[1]=='interview_reply_by' for row in db.execute('PRAGMA table_info(applications)')):
+                db.execute("ALTER TABLE applications ADD COLUMN interview_reply_by TEXT NOT NULL DEFAULT ''")
+                self._recover_interview_replies(db)
             db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('calendar_id',?)",(secrets.token_hex(16),))
             self._migrate_job_links(db)
+
+    @staticmethod
+    def _recover_interview_replies(db):
+        from tracker import _date_candidates, _mail_scope, _utc
+        rows=db.execute("""SELECT a.id,a.deadline,a.date_precision,h.notes,h.received_at
+            FROM applications a JOIN history h ON h.application_id=a.id AND h.fingerprint=a.last_notice_fingerprint
+            WHERE a.status='interview' AND a.deadline!='' AND h.status='interview' AND h.applied=1""").fetchall()
+        for row in rows:
+            summary,*evidence=row['notes'].split('；证据 ')
+            if '截止 '+row['deadline'] not in summary.split('；'):
+                continue
+            # Old history contains bounded quotations. Restore only a reply date
+            # corroborated by the recorded deadline and the original wording.
+            replies={}
+            for item in evidence:
+                label,_,quote=item.partition('：')
+                if not label.endswith((' / text',' / status')):
+                    continue
+                dates,precision,_=_date_candidates(_mail_scope(quote),'interview',_utc(row['received_at']))
+                if dates['interview_reply_by']:
+                    replies[dates['interview_reply_by']]=precision['interview_reply_by']
+            if set(replies)=={row['deadline']}:
+                precision=json.loads(row['date_precision'])
+                precision['interview_reply_by']=replies[row['deadline']]
+                db.execute('UPDATE applications SET interview_reply_by=?,date_precision=? WHERE id=?',
+                           (row['deadline'],json.dumps(precision,ensure_ascii=False),row['id']))
 
     @staticmethod
     def _migrate_job_links(db):
@@ -205,17 +235,21 @@ class Store:
         vals['career_type']=vals['career_type'] or 'other'
         if vals['status'] not in STATUS or vals['career_type'] not in TYPES:
             raise ValueError('无效的投递状态或岗位类型')
-        for f in ('deadline','interview_at','submitted_at','last_notice_at'):
+        for f in ('deadline','interview_at','interview_reply_by','submitted_at','last_notice_at'):
             vals[f]=((at(vals[f]).isoformat(timespec='seconds') if at(vals[f]) else '') if f=='last_notice_at' else date_value(vals[f]))
         precision=data.get('date_precision',old.get('date_precision',{}))
         if data.get('_manual'):
             precision=dict(precision)
-            for f in ('deadline','interview_at'):
+            for f in ('deadline','interview_at','interview_reply_by'):
                 if f in data and vals[f]!=old.get(f,''):
                     if vals[f]:
                         precision[f]='date' if len(vals[f])==10 else 'exact'
                     else:
                         precision.pop(f,None)
+        if old.get('status')=='interview' and vals['status']!='interview':
+            vals['interview_reply_by']=''
+            precision=dict(precision)
+            precision.pop('interview_reply_by',None)
         vals['date_precision']=json.dumps(precision,ensure_ascii=False)
         vals['source_url']=safe_url(vals['source_url'])
         discriminator=('req:'+normalized(vals['requisition'])) if vals['requisition'] else ('title:'+normalized(vals['title'])+'|'+normalized(vals['location']))
@@ -580,12 +614,12 @@ class Store:
                     if dated:merged['date_precision']['deadline']=dated[0]['precision']
                     merged['next_action']='待完成测评：'+', '.join(t['id'] for t in pending) if pending else '测评已完成，等待招聘方结果'
                 if receipt and old and old['status'] in ('interview','offer','closed'):
-                    for field in ('status','deadline','interview_at','next_action','date_precision'):
+                    for field in ('status','deadline','interview_at','interview_reply_by','next_action','date_precision'):
                         merged[field]=old[field]
                 if old and _utc(old.get('last_notice_at')) and (not _utc(merged.get('last_notice_at')) or _utc(merged['last_notice_at'])<_utc(old['last_notice_at'])):
                     merged['last_notice_at']=old['last_notice_at']
             if applied:
-                for f in ('deadline','interview_at'):
+                for f in ('deadline','interview_at','interview_reply_by'):
                     if f in safe and safe[f]!=notice.get(f):
                         if safe[f]:
                             merged.setdefault('date_precision',{})[f]='date' if len(str(safe[f]))==10 else 'exact'
@@ -602,7 +636,7 @@ class Store:
             warnings=list(dict.fromkeys((notice.get('warnings') or [])+(merged.get('warnings') or [])))
             history_status=base.get('status') if base.get('has_explicit_status') and not base.get('review_only') else ''
             label='识别状态：'+str(history_status or '待核实')
-            times='；'.join(f'{name} {base[k]}' for k,name in (('deadline','截止'),('interview_at','面试')) if base.get(k))
+            times='；'.join(f'{name} {base[k]}' for k,name in (('deadline','截止'),('interview_at','面试'),('interview_reply_by','面试回复期限')) if base.get(k))
             evidence=['证据 '+e['source']+' / '+e['field']+'：'+e['quote'] for e in notice.get('evidence',[])][:12]
             msg=('；'.join(x for x in (label,times,*warnings,*evidence) if x))[:6000]
             db.execute('INSERT INTO history(application_id,fingerprint,created_at,received_at,status,source_url,notes,applied) VALUES (?,?,?,?,?,?,?,?)',
@@ -652,17 +686,18 @@ def prioritize(apps, clock=None):
         status=row['status']
         if status not in ('assessment','interview','offer','saved'):
             continue
-        due_field='deadline'
-        due=at(row.get('deadline'))
+        due_field='interview_reply_by' if status=='interview' else 'deadline'
+        due=at(row.get(due_field))
         if status=='interview':
             slot=at(row.get('interview_at'))
-            if slot and (not due or slot<=due):
+            # Prefer a future action over an expired one, then the earlier date.
+            if slot and (not due or (slot<now_hk,slot)<=(due<now_hk,due)):
                 due, due_field=slot, 'interview_at'
         if status=='saved' and not due:
             continue
         if due and due<now_hk and status=='saved':
             continue
-        label={'saved':'申请截止','assessment':'待完成网测','interview':'待确认面试' if due_field=='deadline' and due else '待参加面试','offer':'待处理 Offer'}[status]
+        label={'saved':'申请截止','assessment':'待完成网测','interview':'面试回复截止' if due_field=='interview_reply_by' and due else '待参加面试','offer':'待处理 Offer'}[status]
         days=((due.astimezone(HK).date()-now_hk.astimezone(HK).date()).days if due else None)
         precision=(row.get('date_precision') or {}).get(due_field)
         suffix=('日期待确认' if days is None else '时间已过，请确认结果' if due<now_hk else

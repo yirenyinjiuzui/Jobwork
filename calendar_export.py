@@ -7,7 +7,7 @@ from workbench import HK
 
 _DEADLINE = {
     'saved': '申请截止', 'assessment': '笔试／网测截止',
-    'interview': '面试相关截止', 'offer': 'Offer 回复截止'
+    'offer': 'Offer 回复截止'
 }
 
 def _clean(value):
@@ -58,6 +58,7 @@ def export_application(application, namespace='', clock=None):
     if kind in _DEADLINE:
         scheduled.append(('deadline',_DEADLINE[kind]))
     if kind=='interview':
+        scheduled.append(('interview_reply_by','面试回复截止'))
         scheduled.append(('interview_at','面试'))
     lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Job Workbench//Application Dates//ZH-CN','CALSCALE:GREGORIAN','METHOD:PUBLISH']
     company=application.get('company','')
