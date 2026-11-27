@@ -30,6 +30,17 @@ def now():
 def normalized(v):
     return ' '.join(unicodedata.normalize('NFKC',str(v or '')).casefold().split())
 
+def _matches_legacy_job(job, app):
+    from discovery import _canonical_manual_url
+    if (not job['url'] or not app['source_url'] or
+        normalized(app['company'])!=normalized(job['company']) or
+        normalized(app['requisition'])!=normalized(job['requisition']) or
+        _canonical_manual_url(app['source_url'])!=_canonical_manual_url(job['url'])):
+        return False
+    if job['requisition']:
+        return True
+    return normalized(app['title'])==normalized(job['title']) and normalized(app['location'])==normalized(job['location'])
+
 def date_value(v):
     s = str(v or '').strip()
     if not s:
@@ -122,6 +133,19 @@ class Store:
             if not any(row[1]=='submitted_at' for row in db.execute('PRAGMA table_info(applications)')):
                 db.execute("ALTER TABLE applications ADD COLUMN submitted_at TEXT NOT NULL DEFAULT ''")
             db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('calendar_id',?)",(secrets.token_hex(16),))
+            self._migrate_job_links(db)
+
+    @staticmethod
+    def _migrate_job_links(db):
+        # Row numbers in old links may already refer to a different board's job.
+        links=db.execute("SELECT key,value FROM settings WHERE key GLOB 'job_application:[0-9]*'").fetchall()
+        for key, app_id in links:
+            job=db.execute('SELECT * FROM jobs WHERE id=?',(key.split(':')[1],)).fetchone()
+            app=db.execute('SELECT * FROM applications WHERE id=?',(app_id,)).fetchone()
+            new_key='legacy:'+key
+            if job and app and _matches_legacy_job(job,app):
+                new_key='job_application:'+job['source_id']
+            db.execute('UPDATE settings SET key=? WHERE key=?',(new_key,key))
 
     @contextmanager
     def connect(self, write=False):
@@ -276,18 +300,19 @@ class Store:
                     if normalized(row['company'])!=normalized(job['company']):
                         continue
                     if manual_job(row)['source_id']==job['source_id']:
-                        matches.append(row['id'])
+                        matches.append(row)
                 if len(matches)==1:
-                    db.execute('UPDATE jobs SET source_id=? WHERE id=?',(job['source_id'],matches[0]))
+                    old=matches[0]
+                    db.execute('UPDATE jobs SET source_id=? WHERE id=?',(job['source_id'],old['id']))
+                    db.execute('UPDATE settings SET key=? WHERE key=?',('job_application:'+job['source_id'],'job_application:'+old['source_id']))
                 elif len(matches)>1:
                     raise ValueError('找到多条旧版收藏，请在列表检查原记录；未创建重复岗位')
             return self.put_job(db,job)
 
     def save_job_as_application(self,id):
-        from discovery import _canonical_manual_url
         with self.connect(True) as db:
             job=self.record(db,'jobs',id)
-            key='job_application:'+str(job['id'])
+            key='job_application:'+job['source_id']
             linked=db.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
             if linked:
                 return self.record(db,'applications',linked[0])
@@ -296,11 +321,7 @@ class Store:
             matches=[]
             if job['url']:
                 for row in self.rows(db,'SELECT * FROM applications'):
-                    if (not row['identity'].startswith('job:') and row['source_url'] and
-                        normalized(row['company'])==normalized(job['company']) and
-                        normalized(row['requisition'])==normalized(job['requisition']) and
-                        (job['requisition'] or (normalized(row['title'])==normalized(job['title']) and normalized(row['location'])==normalized(job['location']))) and
-                        _canonical_manual_url(row['source_url'])==_canonical_manual_url(job['url']) and
+                    if (not row['identity'].startswith('job:') and _matches_legacy_job(job,row) and
                         not db.execute("SELECT 1 FROM settings WHERE key LIKE 'job_application:%' AND value=?",(str(row['id']),)).fetchone()):
                         matches.append(row)
             if len(matches)>1:
@@ -309,7 +330,7 @@ class Store:
                 app=matches[0]
             else:
                 d={k:job[k] for k in ('company','title','requisition','location','career_type','deadline')}
-                d.update(source_url=job['url'],status='saved',_job_identity='job:'+str(job['id']))
+                d.update(source_url=job['url'],status='saved',_job_identity='job:'+job['source_id'])
                 app=self._save_application(db,d)
             db.execute('INSERT INTO settings(key,value) VALUES (?,?)',(key,str(app['id'])))
             return app
