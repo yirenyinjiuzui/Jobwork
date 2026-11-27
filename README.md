@@ -4,6 +4,12 @@
 
 本仓库的 1.0 版整合了原 v1.1.13 简体演示基线、资料编辑页更新和浏览器扩展更新。此分支为 **1.0.2 体验预览**，可试用两条流程：收藏岗位到面试改期，编辑资料到分条填表。[预览说明](docs/releases/1.0.2.md) · [日常版 1.0.1](https://github.com/yirenyinjiuzui/Jobwork/releases/tag/v1.0.1)
 
+## 后续迭代从这里开始
+
+本代预览统一从 `preview/workflows-1.0.2` 开发。每次先获取该分支最新提交，核对已有及进行中的 PR，再从该提交建任务分支。新 PR 的目标也选这个预览分支。[当前源码](https://github.com/yirenyinjiuzui/Jobwork/tree/preview/workflows-1.0.2) · [项目 PR](https://github.com/yirenyinjiuzui/Jobwork/pulls)
+
+岗位搜索已包含 [PR #1](https://github.com/yirenyinjiuzui/Jobwork/pull/1)。公司、岗位、地点和编号可以组合搜索，词序、大小写、全角和连续空格均可混用。原有的资料保存与导出、逐条填表、测评待办、面试日历和岗位收藏修复均已包含。下载页记录每次打包的源码提交，可用于核对手头的 ZIP。[完整包与模块包](https://github.com/yirenyinjiuzui/Jobwork/tree/preview/downloads-1.0.2)
+
 ## 功能模块
 
 | Codex 与 GitHub 共用的分类 | 维护范围 | 模块包标识 |
