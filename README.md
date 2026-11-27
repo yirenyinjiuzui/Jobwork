@@ -1,6 +1,8 @@
 # 求职工作台 1.0.2 体验预览下载
 
-用于独立试用的本机演示。日常版见 [v1.0.1](https://github.com/yirenyinjiuzui/Jobwork/releases/tag/v1.0.1)，分批体验说明和源码在[预览分支](https://github.com/yirenyinjiuzui/Jobwork/tree/preview/workflows-1.0.2)。
+本批完整工作台和四个模块均由源码提交 [`22ba9da`](https://github.com/yirenyinjiuzui/Jobwork/commit/22ba9da6a7f4feee2cef11505dfd590c55718962) 构建，包含已合并的岗位搜索 PR #1。后续开发统一从 `preview/workflows-1.0.2` 最新提交建分支，打包文件可用本页的 SHA-256 清单核对。
+
+日常版见 [v1.0.1](https://github.com/yirenyinjiuzui/Jobwork/releases/tag/v1.0.1)，分批体验说明和源码在[预览分支](https://github.com/yirenyinjiuzui/Jobwork/tree/preview/workflows-1.0.2)。
 
 
 - [完整工作台](https://github.com/yirenyinjiuzui/Jobwork/raw/refs/heads/preview/downloads-1.0.2/job-workbench-v1.0.2.zip)
