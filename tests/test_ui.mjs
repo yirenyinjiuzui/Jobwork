@@ -335,6 +335,26 @@ async function main(){
   assert(reviewSection.textContent.includes('JobPosting.description'));
   run("jobRoute='';render()");
   for(const [name] of locationCases)assert(byid('job-results').textContent.includes(name));
+  // Search terms may appear in different fields, in any order, with flexible whitespace.
+  const searchJobs=(value)=>{
+    const input=byid('job-filter-search');
+    input.value=value;input.handlers.input({target:input});
+    return byid('job-results').textContent;
+  };
+  assert(searchJobs('Hong Kong   True HK').includes('True HK'),'location and title terms must match regardless of order');
+  assert(!byid('job-results').textContent.includes('Overseas headquarters'));
+  assert(searchJobs('  ＦＩＸＴＵＲＥ-location   TRUE  HK  ').includes('True HK'),'width, case and whitespace normalization');
+  assert(searchJobs('True HK nonexistent-token').includes('匹配 0 个岗位'),'every search term must match the same job');
+  searchJobs('Hong Kong True HK');
+  const route=byid('job-filter-route');
+  route.value='hk';route.handlers.change({target:route});
+  assert(!byid('job-results').textContent.includes('Overseas internship'),'unmatched title should not appear in location review');
+  searchJobs('Hong Kong Fixture-location');
+  assert(byid('job-results').textContent.includes('正文支持香港实地实习 2 个岗位'));
+  assert(byid('job-results').textContent.includes('地点待复核（不计入香港实地实习）：3 个'));
+  route.value='';route.handlers.change({target:route});
+  searchJobs('   ');
+  for(const [name] of locationCases)assert(byid('job-results').textContent.includes(name));
   console.log('Location capture/UI/HTTP passed: 5 synthetic pages, confirmed save only, raw HK preserved, 2 supported HK and 3 visible review rows, all remain in all-regions view.');
   const identityInputs=[
     {url:'https://example.invalid/identity/A',requisition:'I-1'},
@@ -351,6 +371,9 @@ async function main(){
   }
   run("jobSearch='Fictional UI Identity';jobRoute='';render()");
   assert(byid('job-results').textContent.includes('相似岗位或编号重复，已分别保留'));
+  assert(searchJobs('I-2 Fictional UI Identity').includes('编号 I-2'));
+  assert(!byid('job-results').textContent.includes('编号 I-1'));
+  searchJobs('Fictional UI Identity');
   const saveButtons=nodes(byid('job-results')).filter(n=>n.tagName==='button'&&n.textContent==='存到投递台账');
   assert.equal(saveButtons.length,5);
   for(const button of saveButtons)await button.handlers.click();
