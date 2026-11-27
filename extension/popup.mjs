@@ -1,4 +1,4 @@
-import { loadProfile, describeKey, describeRecord, makePlan, textSuggestions } from './matcher.mjs';
+import { loadProfile, describeKey, describeRecord, makePlan, keptComparisons, textSuggestions } from './matcher.mjs';
 import { inspectPage } from './page.mjs';
 import { buildReviewCards, reviewFieldLabel } from './review-cards.mjs';
 import { cleanDraft, inspectJobPage, makeCaptureLink } from './capture.mjs';
@@ -18,6 +18,7 @@ function clearPlan() {
   $('plan').replaceChildren();
   $('confirm').checked = false;
   $('actions').hidden = true;
+  $('selectAll').hidden = true;
   $('fill').disabled = true;
 }
 function update() {
@@ -25,6 +26,7 @@ function update() {
   $('scan').disabled = !ready;
   $('scanFocused').disabled = !ready;
   $('suggest').disabled = !ready;
+  $('selectAll').disabled = busy || !preview?.rows.some(x => !x.check.checked);
   $('fill').disabled = busy || !preview || !$('confirm').checked || !preview.rows.some(x => x.check.checked);
 }
 function elem(tag, text, className) {
@@ -39,7 +41,17 @@ function showSelectionCount() {
   const selected = preview.rows.filter(row => row.check.checked).length;
   notify($('message'), '已选 ' + selected + ' / ' + preview.rows.length + ' 项');
 }
-function drawPlan(plan) {
+function selectionChanged() {
+  $('confirm').checked = false;
+  showSelectionCount();
+  update();
+}
+$('selectAll').addEventListener('click', () => {
+  if (!preview || busy) return;
+  for (const {check} of preview.rows) check.checked = true;
+  selectionChanged();
+});
+function drawPlan(plan, keptStatus) {
   const container = $('plan');
   $('previewTarget').textContent = '目标网页：' + preview.host + new URL(preview.url).pathname;
   const matches = plan.filter(row => row.match);
@@ -47,16 +59,13 @@ function drawPlan(plan) {
   if (matches.length) {
     const cards = buildReviewCards(document, matches, (m, check) => {
       check.checked = m.confidence === '高';
-      check.addEventListener('change', () => {
-        $('confirm').checked = false;
-        showSelectionCount();
-        update();
-      });
+      check.addEventListener('change', selectionChanged);
       preview.rows.push({ check, m });
     });
     const review = elem('div', '', 'review-scroll');
     review.append(cards);
     container.append(review);
+    $('selectAll').hidden = false;
     $('actions').hidden = false;
   } else {
     container.append(elem('p', '没有可以安全填写的字段。你可以在下方尝试文字建议，或返回网页手填。'));
@@ -71,7 +80,8 @@ function drawPlan(plan) {
     extra.append(elem('summary', title + '（' + rows.length + ' 项）'));
     const details = elem('div', '', 'rows');
     for (const { field, reason } of rows) {
-      const text = reason === '已有内容，不覆盖' ? fieldLabel(field) : fieldLabel(field) + '：' + reason;
+      let text = reason === '已有内容，不覆盖' ? fieldLabel(field) : fieldLabel(field) + '：' + reason;
+      if (keptStatus.has(field.index)) text += keptStatus.get(field.index) ? ' · 与资料一致' : ' · 与资料不同';
       details.append(elem('div', text, 'manual'));
     }
     extra.append(details);
@@ -112,17 +122,27 @@ async function runOnTab(tabId, args) {
 }
 async function scan(mode) {
   if (busy || !Object.keys(profile).length) return;
+  const scannedProfile = profile;
   clearPlan(); busy = true; update();
   notify($('message'), '正在检查当前网页…');
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || typeof tab.id !== 'number') throw new Error('未找到浏览器标签页。');
     const payload = await runOnTab(tab.id, [mode]);
+    if (profile !== scannedProfile) return;
     preview = { tabId: tab.id, url: payload.url, host: payload.host, session: payload.session, rows: [] };
-    drawPlan(makePlan(payload.fields, profile));
+    const current = preview;
+    const checks = keptComparisons(payload.fields, scannedProfile);
+    const keptStatus = new Map();
+    if (checks.length) {
+      const {comparisons} = await runOnTab(tab.id, ['compare-kept', checks, payload.url, payload.session]);
+      if (preview !== current) return;
+      for (const {index, same} of comparisons) keptStatus.set(index, same);
+    }
+    drawPlan(makePlan(payload.fields, scannedProfile), keptStatus);
     if (preview.rows.length) showSelectionCount();
     else notify($('message'));
-  } catch (e) { notify($('message'), '未扫描：' + e.message, true); }
+  } catch (e) { clearPlan(); notify($('message'), '未扫描：' + e.message, true); }
   finally { busy = false; update(); }
 }
 $('scan').addEventListener('click', () => scan('scan'));

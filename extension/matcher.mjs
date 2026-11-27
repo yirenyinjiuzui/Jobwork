@@ -228,6 +228,24 @@ export function makePlan(fields, profile) {
     ? { field: row.field, match: false, reason: '多个输入框似乎对应同一项，留给你确认' } : row);
 }
 
+// Resolve kept record fields with the same record counts, aliases and duplicate
+// checks as an empty field. The actual fill plan still sees them as occupied.
+export function keptComparisons(fields, profile) {
+  const candidates = fields.map(field => {
+    if (!field.hasValue || !field.record || !['text', 'textarea', 'month'].includes(field.type)) return field;
+    return { ...field, hasValue: false };
+  });
+  if (!candidates.some((field, i) => field !== fields[i])) return [];
+  return makePlan(candidates, profile).flatMap(({field, match, key, value}, i) => {
+    if (!match || field === fields[i]) return [];
+    const labels = [field.label, field.aria, field.adjacent].map(normalize).filter(Boolean);
+    const aliases = RECORD_FIELDS[field.record.kind][key];
+    if (!labels.every(label => aliases.includes(label)) ||
+        MANUAL.test(normalize(field.autocomplete)) || VERIFICATION.test(normalize(field.autocomplete))) return [];
+    return [{ index: field.index, token: field.token, value }];
+  });
+}
+
 export function textSuggestions(text, profile) {
   return String(text).split(/\r?\n/u).map(x => x.trim()).filter(Boolean).slice(0, 50)
     .map(label => ({ label, ...matchField({ label, type: 'text' }, profile) }));

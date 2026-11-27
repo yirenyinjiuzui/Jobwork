@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
-import {loadProfile,describeKey,describeRecord,makePlan,textSuggestions} from '../extension/matcher.mjs';
+import {loadProfile,describeKey,describeRecord,makePlan,keptComparisons,textSuggestions} from '../extension/matcher.mjs';
 import {inspectPage} from '../extension/page.mjs';
 import {buildReviewCards,reviewFieldLabel} from '../extension/review-cards.mjs';
 import {cleanDraft,inspectJobPage,makeCaptureLink} from '../extension/capture.mjs';
@@ -25,7 +25,7 @@ function harness(fields=[{index:0,type:'text',label:'姓名',token:'metadata-onl
     scripting:{executeScript:async args=>{calls.push(args);return[{result:args.args[0].startsWith('scan')?{
       url:active.url,host:'localhost:8765',session:'fictional-one-use-session',fields
     }:fillResult}];}}};
-  const context={document:{getElementById:el,createElement:()=>new El()},chrome,URL,loadProfile,describeKey,describeRecord,makePlan,textSuggestions,inspectPage,buildReviewCards,reviewFieldLabel,cleanDraft,inspectJobPage,makeCaptureLink};
+  const context={document:{getElementById:el,createElement:()=>new El()},chrome,URL,loadProfile,describeKey,describeRecord,makePlan,keptComparisons,textSuggestions,inspectPage,buildReviewCards,reviewFieldLabel,cleanDraft,inspectJobPage,makeCaptureLink};
   vm.createContext(context);
   vm.runInContext(readFileSync(new URL('../extension/popup.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,''),context);
   const activate=id=>{active={...active,id};for(const fn of events.activated)fn({tabId:id});};
@@ -68,6 +68,34 @@ test('popup forwards document session with approved fields and clears confirmati
   assert.equal(h.calls[1].args[2],'http://localhost:8765/jobs/A');
   assert.equal(h.calls[1].args[3],'fictional-one-use-session');
   assert.equal(h.el('confirm').checked,false);assert.equal(h.el('fill').disabled,true);
+});
+test('select all only checks eligible rows and never grants fill consent', async () => {
+  const fields=['工作单位','工作岗位','证明人'].map((label,index)=>({
+    index,label,type:'text',token:String(index),record:{kind:'work_experience',number:1,count:1},
+  }));
+  const h=harness(fields);
+  await h.preview('scan',{resume_details:{work_experience:[{company:'示例单位',role:'示例岗位'}]}});
+  const all=h.el('selectAll');
+  assert.equal(all.hidden,false);
+  all.handlers.click();
+  assert.equal(h.el('message').textContent,'已选 2 / 2 项');
+  assert.equal(all.disabled,true);
+  assert.equal(h.el('fill').disabled,true);
+  h.confirm();
+  const review=h.el('plan').children.find(child=>child.className==='review-scroll');
+  const [group]=review.children[0].children;
+  const [,record]=group.children;
+  const check=record.children[1].children[0];
+  check.checked=false;
+  check.handlers.change();
+  assert.equal(h.el('message').textContent,'已选 1 / 2 项');
+  assert.equal(all.disabled,false);
+  assert.equal(h.el('fill').disabled,true);
+  h.confirm();
+  all.handlers.click();
+  assert.equal(h.el('confirm').checked,false);
+  h.confirm();await h.fill();
+  assert.deepEqual(Array.from(h.calls[1].args[1],row=>row.index),[0,1]);
 });
 test('grouped preview displays each work record and retains per-field confirmation',async()=>{
   const h=harness([1,2].map(number=>({
