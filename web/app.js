@@ -317,9 +317,13 @@ function checkMessage(r){
   return '检查结束：'+(openings?'发现 '+openings+' 个新开或重新开放岗位；':'没有新开或重新开放岗位；')+(baseline?' '+baseline+' 个来源已建立基线；':'')+(uncertain?' 有 '+uncertain+' 项暂不可核实，保留最后状态；':'')+(errors.length?' '+errors.length+' 个来源失败，具体原因见来源列表。':'可在总览查看提醒。');
 }
 function renderJobs(target){
-  const q=jobSearch.trim().toLowerCase();
+  const normalizeSearch=value=>String(value??'').normalize('NFKC').toLowerCase();
+  const terms=normalizeSearch(jobSearch).trim().split(/\s+/).filter(Boolean);
   const pool=state.jobs.filter(j=>!openOnly||j.active!==false&&j.active!==0)
-    .filter(j=>!q||[j.company,j.title,j.location,j.requisition].join(' ').toLowerCase().includes(q));
+    .filter(j=>{
+      const fields=[j.company,j.title,j.location,j.requisition].map(normalizeSearch);
+      return terms.every(term=>fields.some(value=>value.includes(term)));
+    });
   const rows=pool.filter(j=>jobRoute==='hk'?j.career_type==='intern'&&j.location_review?.hk_onsite===true:jobRoute==='cn'?j.career_type==='graduate'&&(['mainland','both'].includes(j.region)||!j.region&&mainlandCandidate(j.location)):!jobRoute||j.career_type===jobRoute);
   const review=jobRoute==='hk'?pool.filter(j=>j.career_type==='intern'&&j.location_review?.requires_review):[];
   target.replaceChildren(shortMeta((jobRoute==='hk'?'正文支持香港实地实习 ':'匹配 ')+rows.length+' 个岗位'+(rows.length>120?' · 显示前 120 个':'')));
