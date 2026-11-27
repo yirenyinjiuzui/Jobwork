@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-Hans">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>辅助填表 · 本地练习</title>
+<link rel="stylesheet" href="demo-form.css">
+<link rel="stylesheet" href="review-cards.css">
+<script type="module" src="demo-preview.mjs"></script>
+<main>
+<section id="demo-review" hidden aria-labelledby="demo-review-title">
+  <a href="/#profile">← 资料与填表</a>
+  <header class="demo-review-heading">
+    <div><h1 id="demo-review-title">分条填表预览</h1><p>本地简体练习表单 · 演示资料</p></div>
+    <span class="demo-review-state">等待确认</span>
+  </header>
+  <p id="demo-review-status" role="status"></p>
+  <div id="demo-review-cards"></div>
+  <p id="demo-review-manual" class="demo-review-note" hidden>已有授奖单位保留。证件号、家庭信息和工作许可留待手动处理。当前仅展示拟填值。</p>
+  <a href="/demo-form.html">打开练习表单</a>
+</section>
+<div id="demo-practice">
+<a href="/#profile">← 回到资料与填表</a>
+<h1>辅助填表 · 本地练习</h1>
+<p>这个表单只用于检查浏览器扩展，不发起网络提交。打开扩展，导入模拟资料并预览填表。</p>
+<form id="sample-career-form" aria-label="求职申请练习" method="dialog">
+<div class="fields">
+<label for="fullName">应聘者姓名<input id="fullName" name="full_name" autocomplete="name" type="text"></label>
+<label for="nickname">常用名<input id="nickname" name="preferred_name" autocomplete="nickname" type="text"></label>
+<label for="email">电子邮箱地址<input id="email" name="email" type="email" autocomplete="email"></label>
+<label for="phone">联系电话<input id="phone" name="phone" type="tel" autocomplete="tel"></label>
+<label for="school">学校名称<input id="school" name="school" type="text"></label>
+<label for="major">专业<input id="major" name="major" type="text"></label>
+<label for="city">所在城市<input id="city" name="city" type="text"></label>
+<label>性别<select name="gender"><option value="">请选择</option><option value="M">男</option><option value="F">女</option></select></label>
+<label>最高学历<select name="degree"><option value="">请选择</option><option value="03">大学专科</option><option value="04">大学本科</option><option value="05">硕士研究生</option><option value="06">博士研究生</option></select></label>
+<label>政治面貌<select name="political_status"><option value="">请选择</option><option value="01">中共党员</option><option value="02">中共预备党员</option><option value="03">共青团员</option><option value="13">群众</option></select></label>
+<label for="grad">预计毕业时间（手动填写）<input id="grad" name="graduation" type="month"></label>
+<label for="github">GitHub URL<input id="github" name="github" type="url"></label>
+<label for="permit">是否有工作许可？（手动填写）<select id="permit" name="work_permit"><option value="">请选择</option><option>选项 A</option><option>选项 B</option></select></label>
+<label for="projects" class="wide">项目简介<textarea rows="3" id="projects" name="project_summary"></textarea></label>
+<label for="portfolio">作品集链接（已有资料不覆盖）<input id="portfolio" type="url" name="portfolio" value="https://example.com/demo"></label>
+</div>
+<h2>分条简历资料</h2>
+<fieldset>
+  <legend>教育经历 第1条</legend>
+  <div class="fields">
+    <label>学校<input name="edu1_school"></label>
+    <label>专业<input name="edu1_major"></label>
+    <label>入学年月<input name="edu1_from" type="month"></label>
+    <label>毕业年月<input name="edu1_to" type="month"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>教育经历 第2条</legend>
+  <div class="fields">
+    <label>学校<input name="edu2_school"></label>
+    <label>专业<input name="edu2_major"></label>
+    <label>入学年月<input name="edu2_from" type="month"></label>
+    <label>毕业年月<input name="edu2_to" type="month"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>实习经历 第1条</legend>
+  <div class="fields">
+    <label>实习单位<input name="intern_company"></label>
+    <label>实习岗位<input name="intern_role"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>项目经历 第1条</legend>
+  <div class="fields">
+    <label>项目名称<input name="project_name"></label>
+    <label>担任角色<input name="project_role"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>资格证书 第1条</legend>
+  <div class="fields">
+    <label>证书名称<input name="certificate_title"></label>
+    <label>证书等级<input name="certificate_level"></label>
+    <label>颁发单位<input name="certificate_issuer" value="练习页已有颁发单位"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>工作经历 第1条</legend>
+  <div class="fields">
+    <label>工作单位<input name="work1_company"></label>
+    <label>工作岗位<input name="work1_role"></label>
+    <label>证明人姓名<input name="work1_reference"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>工作经历 第2条</legend>
+  <div class="fields">
+    <label>工作单位<input name="work2_company"></label>
+    <label>工作岗位<input name="work2_role"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>校园经历 第1条</legend>
+  <div class="fields">
+    <label>组织或活动<input name="campus_organization"></label>
+    <label>担任职务<input name="campus_role"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>获奖经历 第1条</legend>
+  <div class="fields">
+    <label>奖项名称<input name="award1_name"></label>
+    <label>获奖等级<input name="award1_level"></label>
+    <label>获奖年月<input name="award1_date" type="month"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>获奖经历 第2条</legend>
+  <div class="fields">
+    <label>奖项名称<input name="award2_name"></label>
+    <label>获奖等级<input name="award2_level"></label>
+    <label>颁发单位<input name="award2_issuer" value="练习页已有授奖单位"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>外语能力 第1条</legend>
+  <div class="fields">
+    <label>语种<input name="lang1_language"></label>
+    <label>考试或证书<input name="lang1_exam"></label>
+    <label>成绩<input name="lang1_score"></label>
+  </div>
+</fieldset>
+<fieldset>
+  <legend>外语能力 第2条</legend>
+  <div class="fields">
+    <label>语种<input name="lang2_language"></label>
+    <label>考试或证书<input name="lang2_exam"></label>
+    <label>成绩<input name="lang2_score"></label>
+  </div>
+</fieldset>
+<section aria-label="家庭情况">
+  <fieldset>
+    <legend>家庭成员 第1条（手动填写）</legend>
+    <div class="fields">
+      <label>姓名<input name="family_name"></label>
+      <label>联系电话<input name="family_phone" type="tel"></label>
+    </div>
+  </fieldset>
+</section>
+<div class="fields">
+  <label>身份证号（手动填写）<input name="identity_number"></label>
+</div>
+<details class="status"><summary>手动确认（模拟）</summary><p>本地练习已结束。没有发送资料。</p></details>
+</form>
+</div>
+</main>
+</html>

@@ -1,0 +1,74 @@
+:root { color-scheme: light; background: #f7f8f5; color: #17312a; font: 13px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
+*, *::before, *::after { box-sizing: border-box; }
+body { width: 420px; max-width: 100vw; margin: 0; }
+header { padding: 18px 20px; background: #142d25; color: #f4f6ee; }
+header small { color: #c3d9ac; font-weight: 650; letter-spacing: .08em; }
+h1 { font-size: 24px; line-height: 1.2; margin: 3px 0; }
+p { margin: 6px 0 9px; color: #40524b; }
+header p { color: #e8eee4; margin-bottom: 0; }
+main { display: grid; gap: 10px; padding: 12px; }
+.step { border: 1px solid #d8e0d7; background: white; border-radius: 9px; padding: 10px 12px; }
+.step-title, summary { color: #193d31; font: inherit; font-weight: 650; margin: 0; }
+.step-title strong { margin-left: 5px; }
+summary { cursor: pointer; }
+input[type="file"] { max-width: 100%; }
+textarea { width: 100%; margin-bottom: 7px; font: inherit; border-radius: 6px; border: 1px solid #b8c7bf; padding: 6px; }
+button { cursor: pointer; color: white; background: #255f46; border: none; border-radius: 6px; padding: 7px 12px; font: inherit; font-weight: 650; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #1a5686; outline-offset: 2px; }
+button:disabled { cursor: default; color: #4f5a54; background: #dfe5df; }
+#message:not(:empty), #profileStatus:not(:empty), #suggestions:not(:empty) { margin-top: 7px; overflow-wrap: anywhere; }
+.error { color: #a12a30; }
+.site { color: #34554b; margin: 7px 0; overflow-wrap: anywhere; }
+.rows { max-height: 205px; overflow: auto; padding-right: 4px; }
+.review-scroll { max-height: 330px; overflow: auto; padding: 2px 4px 2px 2px; margin-bottom: 9px; }
+.manual { padding: 4px 0; color: #54625d; overflow-wrap: anywhere; }
+.consent { display: flex; align-items: start; gap: 5px; margin: 9px 0; }
+footer { padding: 0 12px 12px; color: #475b51; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+#captureStatus:not(:empty) { margin-top: 7px; overflow-wrap: anywhere; }
+.capture-rows { display: grid; grid-template-columns: minmax(60px,auto) minmax(0,1fr); padding: 6px 0; gap: 2px 8px; }
+.capture-rows dt { color: #495e55; }
+.capture-rows dd { margin: 0; overflow-wrap: anywhere; }
+.port { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin: 6px 0 9px; }
+.port input { width: 96px; font: inherit; border: 1px solid #b8c7bf; padding: 4px 5px; border-radius: 5px; }
+
+:root{background:#f5f7fb;color:#23324b;font-family:Inter,"Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+header{background:white;color:#1d2d48;border-bottom:1px solid #dce5f1;padding:14px 18px 12px}
+header small{color:#315dbd;letter-spacing:.02em}header h1{font-size:23px;margin-top:3px}
+main{gap:8px;padding:10px 12px}.step{border:1px solid #dfe6f1;border-radius:12px;padding:11px 14px}
+.step-title,summary{color:#233654}.step-title strong{margin:0}.step p,.site,footer,.manual{color:#53637a}
+button{background:#2856d6;border-radius:7px}button:enabled:hover{background:#1943bb}
+button:disabled{background:#edf0f6;color:#707b8b}
+#scanFocused{background:#edf2ff;color:#254bad}#scanFocused:disabled{color:#8894a9}
+input[type=file]::file-selector-button{background:#edf3ff;color:#254da9;border:0;border-radius:6px;padding:6px 9px;cursor:pointer}
+.consent input,.review-field input{accent-color:#2856d6}#actions{border-top:1px solid #e1e7f1;margin-top:7px;padding-top:4px}
+
+.preview-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 8px; }
+.preview-heading h2 { font-size: 16px; }
+.scan-help summary { color: #466183; font-weight: 500; }
+.scan-help[open] { flex-basis: 100%; }
+#previewTarget:empty { display: none; }
+#previewTarget { margin: 10px 0 2px; }
+#reviewStep #message:not(:empty) { margin: 0 0 5px; font-weight: 650; }
+.review-scroll { --group-height: 34px; --ordinal-height: 28px; scroll-padding-top: calc(var(--group-height) + var(--ordinal-height)); }
+.review-scroll .review-group { overflow: clip; border: 0; border-radius: 0; box-shadow: none; }
+.review-scroll .review-group-heading {
+  position: sticky; top: 0; z-index: 2; align-items: center; min-height: var(--group-height);
+  padding: 4px 8px; background: #eaf1fc; border: 0;
+}
+.review-scroll .review-record { padding: 0 0 4px; }
+.review-scroll .review-record h4 {
+  position: sticky; top: var(--group-height); z-index: 1; display: flex; align-items: center;
+  min-height: var(--ordinal-height); margin: 0; padding: 3px 8px; background: #f5f7fa;
+  color: #354966; font-size: 12px;
+}
+.review-record-name { min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.review-scroll .review-field.selectable {
+  grid-template-columns: 16px minmax(64px, .85fr) minmax(0, 1.8fr);
+  align-items: baseline; gap: 8px; min-height: 35px; padding: 7px 8px;
+}
+.review-scroll .review-field input { align-self: start; width: 15px; height: 15px; margin: 2px 0 0; }
+.review-scroll .review-field:has(input:checked) { background: #edf3ff; box-shadow: inset 3px 0 #2856d6; }
+.review-scroll .review-field:focus-within { outline: 2px solid #2856d6; outline-offset: -2px; }
+.skipped-fields summary { padding: 5px 0; }

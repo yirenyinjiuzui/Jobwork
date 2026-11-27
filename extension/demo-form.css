@@ -1,0 +1,21 @@
+:root{color:#213832;background:#f4f7f3;font:16px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+[hidden]{display:none!important}
+body{max-width:800px;padding:24px;margin:auto}a{color:#235a46}h1{margin:.4rem 0}
+form{border:1px solid #d0d9d0;padding:20px;border-radius:12px;background:#fff}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+label{display:grid;gap:3px;font-size:14px}input,textarea,select{font:inherit;border:1px solid #abbdb1;padding:7px;border-radius:5px;width:100%;box-sizing:border-box}
+button{font:inherit;background:#255f46;color:white;border:0;border-radius:6px;padding:8px 12px;margin-top:16px;cursor:pointer}
+.wide{grid-column:1/-1}.status{color:#315e49;margin-top:12px}
+@media(max-width:600px){.fields{grid-template-columns:1fr}}
+.demo-review-heading{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:8px;margin:12px 0 10px;color:#192d49}
+.demo-review-heading h1{margin:0;font-size:clamp(23px,3.6vw,32px)}
+.demo-review-heading p{margin:5px 0;color:#4a607d;font-size:14px}
+.demo-review-state{padding:4px 10px;border:1px solid #ecd6aa;border-radius:6px;background:#fff7e7;color:#734614;font-size:13px;font-weight:650}
+#demo-review-status{margin:0 0 12px;color:#375879;font-size:14px;font-weight:650}
+#demo-review{font-size:14px}
+:root:has(#demo-review:not([hidden])){background:#f4f6fa}
+#demo-review a{color:#194c80}
+:root:has(#demo-review:not([hidden])){background:#f5f7fb}
+#demo-review:not([hidden]){margin:18px auto;padding:clamp(16px,4vw,34px);background:#fff;border:1px solid #dfe6f0;border-radius:18px;box-shadow:0 8px 26px #253b6209}
+.demo-review-heading{margin:20px 0 12px}.demo-review-heading h1{letter-spacing:-.035em}
+.demo-review-note{padding:10px 12px;margin:14px 0;border-left:3px solid #547ba6;background:#eef4fa;color:#304c6b}

@@ -1,0 +1,46 @@
+{
+  "profile": {
+    "resume_details": {
+      "work_experience": [
+        {
+          "company": "示例能源装备厂",
+          "role": "设备运维助理"
+        },
+        {
+          "company": "示例信息技术所",
+          "role": "测试工程师"
+        }
+      ],
+      "campus_experience": [
+        {
+          "organization": "示例大学科技协会",
+          "role": "项目组组长"
+        }
+      ],
+      "awards": [
+        {
+          "name": "示例校园创新奖",
+          "level": "一等奖",
+          "date": "2025-10"
+        },
+        {
+          "name": "示例志愿服务表彰",
+          "level": "校级",
+          "issuer": "示例授奖单位"
+        }
+      ],
+      "languages": [
+        {
+          "language": "英语",
+          "qualification": "大学英语六级（演示）",
+          "score": "560"
+        },
+        {
+          "language": "日语",
+          "qualification": "日语能力考试 N2（演示）",
+          "score": "135"
+        }
+      ]
+    }
+  }
+}

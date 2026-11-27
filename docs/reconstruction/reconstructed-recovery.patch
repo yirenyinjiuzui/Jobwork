@@ -1,0 +1,152 @@
+--- a/data_snapshot.py
++++ b/data_snapshot.py
+@@ -1,6 +1,7 @@
+ """Verified SQLite snapshots. Never instantiate Store or migrate the source."""
+ import argparse
+ import hashlib
++import json
+ import os
+ from pathlib import Path
+ import sqlite3
+@@ -13,13 +14,52 @@
+     return sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=5)
+ 
+ 
++def validate_schema(db):
++    # Reconstructed from visible v1.1.12 work record; never migrate the source.
++    from workbench import SCHEMA
++    with closing(sqlite3.connect(':memory:')) as reference:
++        reference.executescript(SCHEMA)
++        tables=[r[0] for r in reference.execute("SELECT name FROM sqlite_master WHERE type='table'")]
++        optional={'applications':{'resume_label','submitted_at'}}
++        def unique_columns(con,table):
++            return {tuple(r[2] for r in con.execute('PRAGMA index_info("'+idx[1].replace('"','""')+'")'))
++                    for idx in con.execute('PRAGMA index_list("'+table+'")') if idx[2]}
++        def foreign_keys(con,table):
++            return sorted(tuple(r[2:]) for r in con.execute('PRAGMA foreign_key_list("'+table+'")'))
++        for table in tables:
++            row=db.execute('SELECT type,sql FROM sqlite_master WHERE name=?',(table,)).fetchone()
++            if not row or row[0]!='table' or not row[1] or 'VIRTUAL TABLE' in row[1].upper():
++                raise ValueError('Not a supported workbench backup: missing ordinary table '+table)
++            expected={r[1]:r for r in reference.execute('PRAGMA table_info("'+table+'")')}
++            actual={r[1]:r for r in db.execute('PRAGMA table_info("'+table+'")')}
++            missing=set(expected)-set(actual)-optional.get(table,set())
++            extra=set(actual)-set(expected)
++            if missing or extra:
++                raise ValueError('Incompatible table '+table+'; missing columns: '+','.join(sorted(missing))+'; unsupported columns: '+','.join(sorted(extra)))
++            for name,col in actual.items():
++                if tuple(col[2:])!=tuple(expected[name][2:]):
++                    raise ValueError('Incompatible column definition: '+table+'.'+name)
++            if unique_columns(db,table)!=unique_columns(reference,table):
++                raise ValueError('Incompatible uniqueness/primary-key indexes: '+table)
++            if foreign_keys(db,table)!=foreign_keys(reference,table):
++                raise ValueError('Incompatible foreign-key structure: '+table)
++            if db.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name=?",(table,)).fetchone():
++                raise ValueError('Unsupported trigger on workbench table: '+table)
++        for (raw,) in db.execute('SELECT date_precision FROM applications'):
++            try:valid=isinstance(json.loads(raw),dict)
++            except (TypeError,ValueError):valid=False
++            if not valid:raise ValueError('Unreadable applications.date_precision JSON; keep backup for repair')
++        return tables
++
++
+ def validate(db):
+     if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
+         raise ValueError('Database integrity check failed')
+     if db.execute('PRAGMA foreign_key_check').fetchone() is not None:
+         raise ValueError('Database foreign key check failed')
++    tables=validate_schema(db)
+     counts = {}
+-    for table in ('applications', 'jobs', 'companies', 'sources', 'notifications', 'settings'):
++    for table in tables:
+         counts[table] = db.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0]
+     return counts
+ 
+@@ -80,14 +120,14 @@
+                 raise ValueError('Both source and destination paths are required')
+             source, destination = args.source, args.destination
+         result = snapshot(source, destination)
+-        print('SUCCESS: independent snapshot reopened; integrity_check=ok; foreign_key_check=ok')
++        print('SUCCESS: independent snapshot reopened; integrity_check=ok; foreign_key_check=ok; workbench_schema=ok')
+         print('File:', result['path'])
+-        print('Applications:', result['counts']['applications'], '; Jobs:', result['counts']['jobs'])
++        print('Applications:', result['counts']['applications'], '; Jobs:', result['counts']['jobs'], '; History:', result['counts']['history'])
+         print('SHA256:', result['sha256'])
+         print('Keep the original installation and backup. Verify records before using the new installation.')
+         return 0
+     except (OSError, ValueError, sqlite3.Error, EOFError) as exc:
+-        print('FAILED: ' + str(exc) + '. Source was not replaced. Do not use an incomplete destination.', file=sys.stderr)
++        print('FAILED: ' + str(exc) + '. Original database and source backup were not replaced. Keep them; choose a known workbench backup or request repair. Start the new installation only after SUCCESS; do not delete the current data.', file=sys.stderr)
+         return 1
+ 
+ if __name__ == '__main__':
+--- a/tests/test_data_snapshot.py
++++ b/tests/test_data_snapshot.py
+@@ -40,7 +40,7 @@
+  def test_invalid_or_unrelated_source_cleans_only_new_destination(self):
+   for content in (b'not a database',b''):
+    bad=self.root/'bad';bad.write_bytes(content)
+-   with self.assertRaises(sqlite3.Error):snapshot(bad,self.dst)
++   with self.assertRaises((sqlite3.Error,ValueError)):snapshot(bad,self.dst)
+    self.assertFalse(self.dst.exists());self.assertEqual(bad.read_bytes(),content)
+  def test_parent_missing_fails(self):
+   with self.assertRaises(ValueError):snapshot(self.src,self.root/'missing'/'new.db')
+--- /dev/null
++++ b/tests/test_snapshot_compatibility.py
+@@ -0,0 +1,56 @@
++"""Rebuilt compatibility acceptance from the visible v1.1.12 record."""
++from pathlib import Path
++from tempfile import TemporaryDirectory
++from contextlib import closing
++import sqlite3,subprocess,sys,unittest,json,threading
++from urllib.request import Request,urlopen
++from data_snapshot import snapshot
++from workbench import Store,SCHEMA
++from server import WorkbenchServer
++class CompatibilityTests(unittest.TestCase):
++ def setUp(self):
++  self.tmp=TemporaryDirectory(prefix='恢复 [重建] ');self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name);self.src=self.root/'source.sqlite3';self.dst=self.root/'restored.sqlite3'
++ def make(self,sql=SCHEMA):
++  with closing(sqlite3.connect(self.src)) as c:c.executescript(sql);c.commit()
++ def reject(self,pattern):
++  original=self.src.read_bytes()
++  with self.assertRaisesRegex(ValueError,pattern):snapshot(self.src,self.dst)
++  self.assertFalse(self.dst.exists());self.assertEqual(original,self.src.read_bytes());self.assertFalse(list(self.root.glob('restored.sqlite3-*')))
++ def test_impostor(self):
++  self.make(';'.join('CREATE TABLE '+t+' (unrelated TEXT)' for t in ('applications','jobs','companies','sources','notifications','settings')));self.reject('missing columns')
++ def test_history_required(self):
++  self.make()
++  with sqlite3.connect(self.src) as c:c.execute('DROP TABLE history')
++  self.reject('history')
++ def test_columns_and_unique(self):
++  self.make(SCHEMA.replace('identity TEXT UNIQUE NOT NULL','identity TEXT NOT NULL'));self.reject('uniqueness')
++  self.src.unlink();self.make(SCHEMA.replace('active INTEGER NOT NULL DEFAULT 1','active TEXT NOT NULL DEFAULT 1'));self.reject('jobs.active')
++ def test_view_and_trigger(self):
++  self.make()
++  with sqlite3.connect(self.src) as c:c.execute('DROP TABLE notifications');c.execute('CREATE VIEW notifications AS SELECT 1 AS id')
++  self.reject('notifications');self.src.unlink();self.make()
++  with sqlite3.connect(self.src) as c:c.execute('CREATE TRIGGER unexpected AFTER INSERT ON applications BEGIN DELETE FROM jobs; END')
++  self.reject('trigger')
++ def test_json(self):
++  Store(self.src).save_application(dict(company='Fictional Restore',title='Intern'))
++  with sqlite3.connect(self.src) as c:c.execute("UPDATE applications SET date_precision='[]'")
++  self.reject('date_precision')
++ def test_legacy_optional_columns(self):
++  Store(self.src).save_application(dict(company='Fictional Legacy',title='Intern',status='submitted'))
++  with sqlite3.connect(self.src) as c:c.execute('ALTER TABLE applications DROP COLUMN resume_label');c.execute('ALTER TABLE applications DROP COLUMN submitted_at')
++  original=self.src.read_bytes();snapshot(self.src,self.dst);self.assertEqual(original,self.src.read_bytes());s=Store(self.dst);a=s.applications()[0];self.assertEqual(a['submitted_at'],'');self.assertEqual(s.save_application({'id':a['id'],'status':'interview'})['status'],'interview')
++ def test_cli_reject_preserves_current_and_source(self):
++  self.make(';'.join('CREATE TABLE '+t+' (unrelated TEXT)' for t in ('applications','jobs','companies','sources','notifications','settings')))
++  current=self.root/'current.sqlite3';Store(current).save_application(dict(company='Fictional Current',title='Intern'));before=[p.read_bytes() for p in (self.src,current)]
++  for target in (self.dst,current):
++   r=subprocess.run([sys.executable,'-B',str(Path(__file__).resolve().parents[1]/'data_snapshot.py'),'restore',str(self.src),str(target)],capture_output=True,text=True);self.assertNotEqual(r.returncode,0);self.assertNotIn('SUCCESS',r.stdout);self.assertIn('Keep them',r.stderr)
++  self.assertEqual(before,[p.read_bytes() for p in (self.src,current)]);self.assertFalse(self.dst.exists())
++ def test_restored_http_read_write_survives_rejected_overwrite(self):
++  Store(self.src).save_application(dict(company='Fictional HTTP',title='Intern'));snapshot(self.src,self.dst)
++  s=WorkbenchServer(('127.0.0.1',0),Store(self.dst));thread=threading.Thread(target=s.serve_forever,daemon=True);thread.start();host='http://127.0.0.1:'+str(s.server_port)
++  try:
++   with urlopen(host+'/api/state') as r:a=json.load(r)['applications'][0]
++   with self.assertRaises(FileExistsError):snapshot(self.src,self.dst)
++   request=Request(host+'/api/application',json.dumps({**a,'status':'interview'}).encode(),headers={'Content-Type':'application/json'})
++   with urlopen(request) as r:self.assertEqual(json.load(r)['application']['status'],'interview')
++  finally:s.shutdown();s.server_close();thread.join(3)
