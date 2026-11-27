@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "求职工作台 · 岗位与填表",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "仅在你操作时检查当前公开岗位详情或申请表单，先预览，不自动提交。",
   "permissions": [
     "activeTab",

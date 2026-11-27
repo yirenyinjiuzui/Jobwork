@@ -5,8 +5,8 @@ import re
 from pathlib import Path
 import zipfile
 
-ROOT_FILES = {".gitignore", "README.md", "VERSION"}
-TREE_DIRS = {"docs", "extension", "web", "tests", "skills", "tools"}
+ROOT_FILES = {".gitignore", "README.md", "VERSION", "AGENTS.md"}
+TREE_DIRS = {"docs", "extension", "web", "tests", "skills", "tools", "modules"}
 RESTORE = r"""$ErrorActionPreference = 'Stop'
 try {
     $txt = (Read-Host 'Full path to the downloaded TXT').Trim().Trim('"')
