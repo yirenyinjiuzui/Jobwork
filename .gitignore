@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+profile*.json
+job-profile*.json
+applications.csv
+.venv/
