@@ -468,7 +468,7 @@ class Store:
             task_key=tasks_api.key(notice.get('assessment_id'))
             task=tasks.get(task_key)
             receipt=notice.get('assessment_completion')
-            task_event=bool(notice.get('is_eml') and task_key and (receipt or notice.get('status')=='assessment'))
+            task_event=bool(task_key and (receipt or notice.get('status')=='assessment'))
             relative=notice.get('assessment_relative')
             assessment_ok=bool(notice.get('assessment_id') and notice.get('received_at') and notice.get('sent_precision')=='exact' and
                 (task or not tasks and not prior_assessment and (not old or old['status'] in ('saved','submitted','waiting'))))
@@ -476,7 +476,9 @@ class Store:
                 raise ValueError('请明确确认邮件来源、发送时间及同一测评编号后，再更新相对截止估计。')
             base=dict(notice)
             if receipt:
-                if not task or not _utc(task.get('notice_at')) or not notice.get('received_at') or notice.get('sent_precision')!='exact' or notice.get('requires_review') or not old or match_application(notice,self.rows(db,'SELECT * FROM applications')).get('match_id')!=old['id']:
+                if not old:
+                    raise ValueError('请为测评完成回执选择已有投递记录。')
+                if not task or not _utc(task.get('notice_at')) or not notice.get('received_at') or notice.get('sent_precision')!='exact' or notice.get('requires_review') or match_application(notice,self.rows(db,'SELECT * FROM applications')).get('match_id')!=old['id']:
                     if overrides.get('review_confirmed') is not True:
                         raise ValueError('完成回执无法唯一确认原测评，请复核；不会清除其他待办。')
                     base['review_only']=True

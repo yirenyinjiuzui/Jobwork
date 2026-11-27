@@ -310,6 +310,18 @@ def _date_candidates(text, status, received):
 
 def parse_notice(text, received_at=None, source_url='', company='', title='', requisition=''):
     """Return an editable notice preview with no side effects."""
+    notice = _parse_text(text, received_at, source_url, company, title, requisition)
+    if not notice['completion'] and notice['status'] != 'assessment':
+        return notice
+    parts = [{'source': '粘贴通知当前正文', 'text': _mail_scope(text)}]
+    parsed = _parse_notice_parts(parts, received_at, source_url, company, title, requisition,
+                                 legacy_fingerprint=notice['fingerprint'])
+    if notice['completion'] or (parsed['assessment_id'] and parsed['status'] == 'assessment'):
+        return parsed
+    return notice
+
+
+def _parse_text(text, received_at=None, source_url='', company='', title='', requisition=''):
     original = _clean(text)
     active = _strip_history(unicodedata.normalize('NFKC', original))
     received = _utc(received_at)
@@ -398,7 +410,7 @@ def _mail_scope(text):
         if re.search(r'(?i)(?:recommended|suggested) (?:jobs|roles|positions|opportunities|vacancies)|other (?:jobs|roles|opportunities)|'
                      r'you (?:may|might) (?:also )?(?:like|be interested|consider)|similar (?:jobs|roles)|'
                      r'推荐职位|推荐岗位|推薦職位|其他职位|其他岗位|其他職位|unsubscribe|取消订阅|取消訂閱|'
-                     r'--+\s*(?:original message|forwarded message)|^On .+ wrote:|^在.+写道', line):
+                     r'--+\s*(?:original message|forwarded message|转发邮件|轉寄郵件|原始邮件|原始郵件)|^On .+ wrote:|^在.+写道', line):
             break
         if line.lstrip().startswith('>'):
             continue
@@ -487,7 +499,12 @@ def parse_eml(raw: bytes):
 def parse_eml_notice(mail, received_at=None, source_url='', company='', title='', requisition=''):
     """Conservative MIME reconciliation with quoted, inert, scoped evidence."""
     parts = ([{'source': '邮件主题', 'text': mail['subject']}] if mail.get('subject') else []) + mail.get('bodies', [])
-    received_at = received_at or mail.get('received_at')
+    notice = _parse_notice_parts(parts, received_at or mail.get('received_at'), source_url, company, title, requisition)
+    notice['is_eml'] = True
+    return notice
+
+
+def _parse_notice_parts(parts, received_at, source_url, company, title, requisition, legacy_fingerprint=None):
     evidence, reasons, candidates = [], [], []
     identities = {k: {} for k in _MAIL_LABELS}
     states = set()
@@ -499,7 +516,7 @@ def parse_eml_notice(mail, received_at=None, source_url='', company='', title=''
         for key, value in identity.items():
             if value:
                 identities[key][_norm(value)] = value
-        parsed = parse_notice(text, received_at=received_at)
+        parsed = _parse_text(text, received_at=received_at)
         candidates.append(parsed)
         # Check sentences independently so one MIME representation cannot silently
         # win by the parser's status precedence. Generic footer has no status.
@@ -538,7 +555,7 @@ def parse_eml_notice(mail, received_at=None, source_url='', company='', title=''
         reasons.append('未识别到明确状态，请人工确认')
     status = next(iter(states)) if len(states) == 1 else 'waiting'
     chosen = next((p for p in candidates if p['has_explicit_status'] and p['status'] == status), None)
-    notice = dict(chosen or parse_notice('', received_at=received_at))
+    notice = dict(chosen or _parse_text('', received_at=received_at))
     # Never borrow a date from the alternative silently when it disagrees.
     for field in ('deadline', 'interview_at'):
         vals = {p[field] for p in candidates if p[field]}
@@ -569,7 +586,7 @@ def parse_eml_notice(mail, received_at=None, source_url='', company='', title=''
     for item in evidence:
         unique_evidence.setdefault((item['source'],item['field'],_norm(item['value'])),item)
     evidence=sorted(unique_evidence.values(),key=lambda e:e['field']!='status')
-    notice.update(is_eml=True, requires_review=bool(reasons), evidence=evidence[:40], source_url=_clean(source_url))
+    notice.update(requires_review=bool(reasons), evidence=evidence[:40], source_url=_clean(source_url))
     notice['status'] = status
     notice['has_explicit_status'] = len(states) == 1 and not reasons
     notice['confidence'] = 'low' if reasons else 'high'
@@ -578,7 +595,7 @@ def parse_eml_notice(mail, received_at=None, source_url='', company='', title=''
     if reasons:
         notice.update(status='waiting', deadline='', interview_at='', next_action='', completion=False, interview_cancelled=False)
         notice['date_precision'] = {}
-    notice['legacy_fingerprint'] = sha256(json.dumps([parts, identity, notice.get('deadline')], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    notice['legacy_fingerprint'] = legacy_fingerprint or sha256(json.dumps([parts, identity, notice.get('deadline')], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     notice['fingerprint'] = sha256(json.dumps([notice['legacy_fingerprint'],notice.get('received_at','')]).encode()).hexdigest()
     return notice
 
@@ -606,7 +623,8 @@ def match_application(notice, applications):
         return {'match_id': None, 'matches': [], 'ambiguous': False, 'reason': '缺少公司或岗位标识'}
     same_company = [a for a in applications if _norm(a.get('company')) == company]
     exact = [a for a in same_company if req and _qid(a.get('requisition')) == req]
-    if notice.get('is_eml') and exact and title and any(_norm(a.get('title')) != title for a in exact):
+    verify_history = notice.get('is_eml') or notice.get('assessment_completion')
+    if verify_history and exact and title and any(_norm(a.get('title')) != title for a in exact):
         return {'match_id': None, 'matches': [], 'ambiguous': True, 'reason': '邮件编号与台账岗位名称冲突，必须人工复核'}
     reason = '公司与岗位编号一致'
     if not exact and title:
@@ -614,7 +632,7 @@ def match_application(notice, applications):
         can_backfill = len(titled) == 1 and not _qid(titled[0].get('requisition'))
         exact = titled if not req or can_backfill else []
         reason = '公司与岗位名称唯一一致'
-    if notice.get('is_eml') and exact:
+    if verify_history and exact:
         checks=[application_chronology(notice,a) for a in exact]
         eligible=[a for a,check in zip(exact,checks) if check=='ok']
         if len(eligible)!=len(exact):

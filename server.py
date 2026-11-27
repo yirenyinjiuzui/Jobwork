@@ -298,11 +298,13 @@ class Handler(BaseHTTPRequestHandler):
                 selected=next((a for a in applications if a['id']==match.get('match_id')),None)
                 with store.connect() as db:
                     known=assessment_tasks.load(db,selected)
-                notice['assessment_completion_confirmation_required']=True
-                if not selected or assessment_tasks.key(notice.get('assessment_id')) not in known:
+                task=known.get(assessment_tasks.key(notice.get('assessment_id')))
+                if task and task.get('notice_at'):
+                    notice['assessment_completion_confirmation_required']=True
+                else:
                     notice['requires_review']=True
                     notice['has_explicit_status']=False
-                    notice['warnings'].append('完成回执无法唯一对应已知测评，仅复核留历史，不清除待办。')
+                    notice['warnings'].append('无法核实对应的测评编号或通知时间，仅复核留历史，不清除待办。')
             bound={**notice,'_preview_apps':{str(a['id']):a for a in applications}}
             return {'token':self.server.make_preview(bound),'notice':notice,'match':match}
         if path=='/api/notice/apply':

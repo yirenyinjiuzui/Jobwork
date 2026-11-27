@@ -2,7 +2,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from tracker import parse_eml,parse_eml_notice
+from tracker import parse_eml,parse_eml_notice,parse_notice
 from workbench import Store
 
 BASE=dict(company='Fictional Receipts',title='Test Intern',requisition='RC-1',submitted_at='2026-11-01T10:00+08:00')
@@ -61,3 +61,45 @@ class CompletionTests(unittest.TestCase):
  def test_receipt_with_equal_invitation_timestamp_is_only_history(self):
   self.apply(mail());r=self.apply(mail(day=2,complete=True),assessment_completion_confirmed=True)
   self.assertFalse(r['applied']);self.assertEqual(r['application']['status'],'assessment')
+
+ def test_pasted_completion_keeps_other_assessment_on_dashboard(self):
+  self.apply(mail());self.apply(mail(task='B-2',day=3))
+  body='Company: Fictional Receipts\nRole: Test Intern\nJob ID: RC-1\nAssessment ID: A-1\nYour online assessment has been successfully completed.'
+  old=parse_notice(body,'2026-11-02T10:00+08:00')
+  self.assertFalse(self.apply(old,assessment_completion_confirmed=True)['applied'])
+  receipt=parse_notice(body,'2026-11-04T10:00+08:00')
+  with self.assertRaisesRegex(ValueError,'明确确认'):self.apply(receipt)
+  self.assertTrue(self.apply(receipt,assessment_completion_confirmed=True)['applied'])
+  state=self.s.state()
+  self.assertEqual([(r['status'],r['deadline']) for r in state['today']],[('assessment','2026-11-12T10:00+08:00')])
+  self.assertEqual({t['id']:t['completed'] for t in state['applications'][0]['assessment_tasks']},{'A-1':True,'B-2':False})
+  self.assertTrue(self.apply(receipt,assessment_completion_confirmed=True)['duplicate'])
+  self.assertEqual(len(self.s.history(self.a['id'])),4)
+
+ def test_unverified_pasted_receipts_only_add_history(self):
+  self.apply(mail());self.apply(mail(task='B-2',day=3))
+  before=self.s.state()
+  for label,sent in [('', '2026-11-04T10:00+08:00'),('Assessment ID: UNKNOWN','2026-11-04T10:00+08:00'),
+                     ('Assessment ID: A-1\nTest ID: B-2','2026-11-04T10:00+08:00'),('Assessment ID: A-1',''),
+                     ('-----原始邮件-----\nAssessment ID: B-2','2026-11-04T10:00+08:00')]:
+   with self.subTest(label=label,sent=sent):
+    receipt=parse_notice(f'Your online assessment has been successfully completed.\n{label}',sent,company=BASE['company'],requisition=BASE['requisition'])
+    self.assertFalse(self.apply(receipt,review_confirmed=True,assessment_completion_confirmed=True,status='waiting')['applied'])
+    self.assertEqual(self.s.state(),before)
+    self.assertFalse(self.s.history(self.a['id'])[0]['applied'])
+
+ def test_pasted_invitations_track_only_explicit_unambiguous_assessment_ids(self):
+  identity=dict(company=BASE['company'],requisition=BASE['requisition'])
+  for label in ('','Assessment ID: A-1\nTest ID: B-2'):
+   notice=parse_notice(f'Online assessment. Deadline: 2026-11-10 10:00 HKT.\n{label}','2026-11-02T10:00+08:00',**identity)
+   self.assertTrue(self.apply(notice)['applied'])
+   self.assertEqual(self.s.applications()[0]['deadline'],'2026-11-10T10:00+08:00')
+   self.assertNotIn('assessment_tasks',self.s.state()['applications'][0])
+  for task,day in [('A-1',10),('B-2',12)]:
+   notice=parse_notice(f'Assessment ID: {task}\nOnline assessment. Deadline: 2026-11-{day} 10:00 HKT.','2026-11-03T10:00+08:00',**identity)
+   self.assertTrue(self.apply(notice)['applied'])
+  receipt=parse_notice('Assessment ID: A-1\nYour online assessment has been successfully completed.','2026-11-04T10:00+08:00',**identity)
+  self.assertTrue(self.apply(receipt,assessment_completion_confirmed=True)['applied'])
+  pending=self.s.state()['today'][0]
+  self.assertEqual({t['id']:t['completed'] for t in pending['assessment_tasks']},{'A-1':True,'B-2':False})
+  self.assertEqual(pending['deadline'],'2026-11-12T10:00+08:00')

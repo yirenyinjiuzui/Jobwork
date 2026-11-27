@@ -468,11 +468,12 @@ function noticeCard(app){
 function renderPreview({token,notice:n,match:m}){
   if(!n||!token)throw new Error('没有收到有效的预览结果。');
   const rows=state.applications||[];
-  const options=[['','请选择对应岗位或新建'],['__new','新建投递记录'],...rows.map(a=>[String(a.id),a.company+' / '+a.title+(a.requisition?' · '+a.requisition:'')])];
+  const options=n.assessment_completion?[['','请选择对应的已有投递']]:[['','请选择对应岗位或新建'],['__new','新建投递记录']];
+  options.push(...rows.map(a=>[String(a.id),a.company+' / '+a.title+(a.requisition?' · '+a.requisition:'')]));
   const exact=rows.find(a=>equalId(a.id,m?.match_id));
   const selection=exact&&!m?.ambiguous?String(exact.id):'';
   const title=node('h3','','确认本次导入');title.tabIndex=-1;
-  const warning=[...(Array.isArray(n.warnings)?n.warnings:[]),m?.ambiguous?(m.reason||'匹配不明确，必须由你复核。'):!selection?'没有自动关联，请选择一条记录或新建。':''].filter(Boolean);
+  const warning=[...(Array.isArray(n.warnings)?n.warnings:[]),m?.ambiguous?(m.reason||'匹配不明确，必须由你复核。'):!selection?'没有自动关联，请核对要写入的岗位。':''].filter(Boolean);
   const oldVals={company:plain(n.company),title:plain(n.title),requisition:plain(n.requisition),status:n.has_explicit_status===false?'':plain(n.status),deadline:fieldDate(n.deadline),interview_at:fieldDate(n.interview_at),next_action:plain(n.next_action)};
   return node('section','details',title,
     paragraph(exact?'建议关联：'+exact.company+' / '+exact.title:'当前没有自动匹配。','meta'),
