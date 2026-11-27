@@ -316,14 +316,17 @@ function checkMessage(r){
   const uncertain=results.reduce((sum,x)=>sum+Number(x.unverified||0),0);
   return '检查结束：'+(openings?'发现 '+openings+' 个新开或重新开放岗位；':'没有新开或重新开放岗位；')+(baseline?' '+baseline+' 个来源已建立基线；':'')+(uncertain?' 有 '+uncertain+' 项暂不可核实，保留最后状态；':'')+(errors.length?' '+errors.length+' 个来源失败，具体原因见来源列表。':'可在总览查看提醒。');
 }
+function recordSearch(query){
+  const normalize=value=>String(value??'').normalize('NFKC').toLowerCase();
+  const terms=normalize(query).trim().split(/\s+/).filter(Boolean);
+  return record=>{
+    const fields=[record.company,record.title,record.location,record.requisition].map(normalize);
+    return terms.every(term=>fields.some(value=>value.includes(term)));
+  };
+}
 function renderJobs(target){
-  const normalizeSearch=value=>String(value??'').normalize('NFKC').toLowerCase();
-  const terms=normalizeSearch(jobSearch).trim().split(/\s+/).filter(Boolean);
   const pool=state.jobs.filter(j=>!openOnly||j.active!==false&&j.active!==0)
-    .filter(j=>{
-      const fields=[j.company,j.title,j.location,j.requisition].map(normalizeSearch);
-      return terms.every(term=>fields.some(value=>value.includes(term)));
-    });
+    .filter(recordSearch(jobSearch));
   const rows=pool.filter(j=>jobRoute==='hk'?j.career_type==='intern'&&j.location_review?.hk_onsite===true:jobRoute==='cn'?j.career_type==='graduate'&&(['mainland','both'].includes(j.region)||!j.region&&mainlandCandidate(j.location)):!jobRoute||j.career_type===jobRoute);
   const review=jobRoute==='hk'?pool.filter(j=>j.career_type==='intern'&&j.location_review?.requires_review):[];
   target.replaceChildren(shortMeta((jobRoute==='hk'?'正文支持香港实地实习 ':'匹配 ')+rows.length+' 个岗位'+(rows.length>120?' · 显示前 120 个':'')));
@@ -397,8 +400,7 @@ function tracking(){
     card('全部投递',node('div','inline',searchField,filterField,viewPicker),holder)];
 }
 function renderApplications(target){
-  const q=search.trim().toLowerCase();
-  const rows=state.applications.filter(a=>(!statusFilter||a.status===statusFilter)&&(!q||[a.company,a.title,a.requisition,a.location].join(' ').toLowerCase().includes(q)));
+  const rows=state.applications.filter(a=>!statusFilter||a.status===statusFilter).filter(recordSearch(search));
   target.replaceChildren(shortMeta('匹配 '+rows.length+' 条记录'+(rows.length>150?' · 显示前 150 条':'')));
   if(!rows.length){target.append(empty('暂无匹配的投递。先建立一条投递记录，或导入模拟数据。'));return;}
   if(applicationView==='board'){target.append(applicationBoard(rows.slice(0,150),target));return;}

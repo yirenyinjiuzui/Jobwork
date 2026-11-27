@@ -113,7 +113,23 @@ async function main(){
   assert(ics.ok);
   assert.match(ics.headers.get('content-type'),/^text\/calendar/);
   assert.match(await ics.text(),/BEGIN:VEVENT/);
+  const searchApps=value=>{
+    const input=byid('app-filter-search');
+    input.value=value;input.handlers.input({target:input});
+    return byid('application-results').textContent;
+  };
+  assert(searchApps('ＪＲ-２２３４   测试公司 自动化').includes('匹配 1 条记录'),'tracking search supports full-width input and reversed cross-field terms');
+  assert(searchApps('自动化 不存在').includes('匹配 0 条记录'),'all terms must match the same application');
+  const statusInput=byid('app-filter-status');
+  statusInput.value='submitted';statusInput.handlers.change({target:statusInput});
+  assert(searchApps('自动化 JR-2234').includes('匹配 0 条记录'),'status filter still applies');
+  statusInput.value='interview';statusInput.handlers.change({target:statusInput});
+  assert(searchApps('JR-2234 测试公司').includes('匹配 1 条记录'));
   await click('看板');
+  assert(byid('application-results').textContent.includes('匹配 1 条记录'));
+  assert(searchApps('JR-2234 missing').includes('匹配 0 条记录'),'board uses the same search');
+  statusInput.value='';statusInput.handlers.change({target:statusInput});
+  assert(searchApps('    ').includes('自动化实习'),'whitespace clears query');
   const board=nodes(root).find(n=>n.attrs?.['aria-label']==='按状态组织的投递看板');
   assert(board?.textContent?.includes('自动化实习'));
   assert(board?.textContent?.includes('英文简历 v4'));
