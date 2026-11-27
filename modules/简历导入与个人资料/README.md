@@ -18,3 +18,4 @@
 - [tests/test_resume_import.py](../../tests/test_resume_import.py)
 - [tests/test_ui.mjs](../../tests/test_ui.mjs)
 - [tests/mock_dom.mjs](../../tests/mock_dom.mjs)
+- [tests/test_server.py](../../tests/test_server.py)

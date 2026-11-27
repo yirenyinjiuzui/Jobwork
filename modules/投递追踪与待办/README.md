@@ -29,3 +29,8 @@
 - [tests/test_mail_chronology.py](../../tests/test_mail_chronology.py)
 - [tests/test_mail_evidence.py](../../tests/test_mail_evidence.py)
 - [tests/test_tracker.py](../../tests/test_tracker.py)
+- [data_snapshot.py](../../data_snapshot.py)
+- [tests/test_ui.mjs](../../tests/test_ui.mjs)
+- [tests/mock_dom.mjs](../../tests/mock_dom.mjs)
+- [tests/test_server.py](../../tests/test_server.py)
+- [tests/test_data_snapshot.py](../../tests/test_data_snapshot.py)
