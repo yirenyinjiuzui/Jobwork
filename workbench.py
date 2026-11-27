@@ -121,6 +121,10 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
+class ProfileConflict(ValueError):
+    pass
+
+
 class Store:
     def __init__(self, filename):
         self.file = str(Path(filename).resolve())
@@ -427,6 +431,12 @@ class Store:
             db.execute('INSERT INTO settings(key,value) VALUES (?,?)',('source_evidence:'+secrets.token_hex(16),json.dumps(proof,ensure_ascii=False)))
             return {'job':self.record(db,'jobs',job['id']),'evidence':proof}
 
+    @staticmethod
+    def profile_snapshot(db):
+        values=dict(db.execute("SELECT key,value FROM settings WHERE key IN ('profile','profile_revision')"))
+        return {'profile':json.loads(values.get('profile','{}')),
+                'profile_revision':int(values.get('profile_revision',0))}
+
     def set_profile(self,data):
         profile={k:short(data.get(k),5000 if k=='project_summary' else 500) for k in PROFILE if k!='answers'}
         answers=data.get('answers') or {}
@@ -434,8 +444,11 @@ class Store:
             raise ValueError('常见问题答案必须是对象')
         profile['answers']={short(k,180):short(v,3500) for k,v in list(answers.items())[:40] if short(k,180)}
         with self.connect(True) as db:
-            saved = db.execute("SELECT value FROM settings WHERE key='profile'").fetchone()
-            previous = json.loads(saved[0]) if saved else {}
+            snapshot=self.profile_snapshot(db)
+            revision=snapshot['profile_revision']
+            if type(data.get('profile_revision')) is not int or data['profile_revision']!=revision:
+                raise ProfileConflict('当前页未读取最新资料。请保留本页草稿，另开资料页核对后保存。')
+            previous=snapshot['profile']
             if 'resume_details' in data:
                 if data.get('resume_fields_version') != 1 and has_expanded_resume(previous.get('resume_details', {})):
                     raise ValueError('资料页已更新，请刷新页面后再保存。')
@@ -443,7 +456,8 @@ class Store:
             elif 'resume_details' in previous:
                 profile['resume_details'] = previous['resume_details']
             db.execute("INSERT INTO settings(key,value) VALUES ('profile',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(json.dumps(profile,ensure_ascii=False),))
-        return profile
+            db.execute("INSERT INTO settings(key,value) VALUES ('profile_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(revision+1),))
+        return {'profile':profile,'profile_revision':revision+1}
 
     def mark_read(self,id=None):
         with self.connect(True) as db:
@@ -602,7 +616,7 @@ class Store:
             for app in apps:
                 tracked=list(assessment_tasks.load(db,app).values())
                 if tracked:app['assessment_tasks']=tracked
-            saved=db.execute("SELECT value FROM settings WHERE key='profile'").fetchone()
+            profile=self.profile_snapshot(db)
             jobs=self.rows(db,'SELECT * FROM jobs ORDER BY active DESC,id DESC')
             source_map={r['id']:r for r in self.rows(db,'SELECT * FROM sources')}
             reviews={int(r['key'].split(':')[1]):json.loads(r['value']) for r in db.execute("SELECT key,value FROM settings WHERE key LIKE 'source_review:%'")}
@@ -625,7 +639,7 @@ class Store:
                     ((normalized(other['title'])==normalized(job['title']) and normalized(other['location'])==normalized(job['location'])) or
                      (job['requisition'] and normalized(other['requisition'])==normalized(job['requisition'])))]
                 job['identity_review']=('相似岗位或编号重复，已分别保留；请核对来源和职责后分别记录。相关条目：'+', '.join(map(str,similar[:8]))) if similar else ''
-            return dict(applications=apps,today=prioritize(apps),profile=json.loads(saved[0]) if saved else {},
+            return dict(applications=apps,today=prioritize(apps),**profile,
                 companies=self.rows(db,'SELECT * FROM companies ORDER BY name'),
                 sources=self.rows(db,'SELECT * FROM sources ORDER BY id'),
                 jobs=jobs,

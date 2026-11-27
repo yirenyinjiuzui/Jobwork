@@ -167,20 +167,40 @@ class API(unittest.TestCase):
                     url='https://example.com/jobs/77',eligibility='2027 届',start='明年夏季'))['job']
         self.assertEqual(job['career_type'],'graduate')
         self.assertEqual(job['eligibility'],'2027 届')
-        profile=self.post('/api/profile',{'full_name':'示例用户','email':'sample@example.com','answers':{'Why':'Test'},'ignored_key':'hidden'})['profile']
+        def save(data,**kwargs):
+            return self.post('/api/profile',dict(data,profile_revision=self.get('/api/state')['profile_revision']),**kwargs)
+        profile=save({'full_name':'示例用户','email':'sample@example.com','answers':{'Why':'Test'},'ignored_key':'hidden'})['profile']
         self.assertNotIn('ignored_key',profile)
         self.assertEqual(self.get('/api/state')['profile']['full_name'],'示例用户')
         details={'target_position':'测试开发','education':[{'school':'示例大学','end':'2027-06','unknown':'ignored'},{}]}
-        saved=self.post('/api/profile',{'full_name':'示例用户','resume_details':details})['profile']['resume_details']
+        saved=save({'full_name':'示例用户','resume_details':details})['profile']['resume_details']
         self.assertEqual(saved['education'],[{'school':'示例大学','end':'2027-06'}])
-        self.post('/api/profile',{'full_name':'旧页面保存'})
+        save({'full_name':'旧页面保存'})
         self.assertEqual(self.get('/api/state')['profile']['resume_details'],saved)
         details['family_relations']=[{'name':'演示家人','relation':'演示关系'}]
-        expanded=self.post('/api/profile',{'resume_fields_version':1,'resume_details':details})['profile']['resume_details']
+        expanded=save({'resume_fields_version':1,'resume_details':details})['profile']['resume_details']
         self.assertEqual(expanded['family_relations'],[{'name':'演示家人','relation':'演示关系'}])
-        stale=self.post('/api/profile',{'resume_details':{'education':[]}},expect=400)
+        stale=save({'resume_details':{'education':[]}},expect=400)
         self.assertIn('刷新页面',stale['error'])
         self.assertEqual(self.get('/api/state')['profile']['resume_details'],expanded)
+
+    def test_profile_revision_serializes_two_writers(self):
+        from concurrent.futures import ThreadPoolExecutor
+        revision=self.get('/api/state')['profile_revision']
+        start=threading.Barrier(2)
+        def write(name):
+            start.wait(timeout=4)
+            data={'full_name':name,'profile_revision':revision,'resume_fields_version':1}
+            req=Request(self.url+'/api/profile',json.dumps(data).encode(),headers={'Content-Type':'application/json'})
+            try:
+                with urlopen(req,timeout=4) as response:return response.status,name
+            except HTTPError as error:return error.code,name
+        with ThreadPoolExecutor(2) as pool:
+            winner,loser=sorted(pool.map(write,['演示甲','演示乙']))
+        self.assertEqual((winner[0],loser[0]),(200,409))
+        self.post('/api/profile',{'full_name':'旧标签页'},expect=409)
+        latest=self.get('/api/state')
+        self.assertEqual((latest['profile_revision'],latest['profile']['full_name']),(revision+1,winner[1]))
 
     def test_manual_job_reuses_old_tracking_url_identity(self):
         data=dict(company='Migration Example',title='Engineer Intern',location='Hong Kong',career_type='intern',

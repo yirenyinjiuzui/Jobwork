@@ -22,7 +22,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import webbrowser
 
-from workbench import Store, HK, safe_url, normalized
+from workbench import Store, HK, ProfileConflict, safe_url, normalized
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = {
@@ -216,6 +216,8 @@ class Handler(BaseHTTPRequestHandler):
             result=self.mutate(urlsplit(self.path).path,data)
             if result is not None:
                 self.reply({'ok':True,**result})
+        except ProfileConflict as e:
+            self.reply({'error':str(e)},409)
         except sqlite3.IntegrityError:
             self.reply({'error':'已有相同公司、岗位或招聘源，请更新原记录'},409)
         except (ValueError, KeyError, TypeError, UnicodeError) as e:
@@ -252,7 +254,7 @@ class Handler(BaseHTTPRequestHandler):
             from resume_import import preview_resume
             return preview_resume(d.get('filename'),data_blob(d.get('content_base64'),5*1024*1024))
         if path=='/api/profile':
-            return {'profile':store.set_profile(d)}
+            return store.set_profile(d)
         if path=='/api/notice/preview':
             from tracker import parse_eml, parse_notice, parse_eml_notice, match_application
             mail=parse_eml(data_blob(d['eml_base64'],4*1024*1024)) if d.get('eml_base64') else {}

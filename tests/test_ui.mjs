@@ -30,6 +30,7 @@ class Element {
   removeAttribute(k){delete this.attrs[k];}
   addEventListener(k,f){this.handlers[k]=f;}
   focus(){}
+  reportValidity(){return true;}
   click(){}
   remove(){}
   scrollIntoView(){}
@@ -215,6 +216,33 @@ async function main(){
     awards:[{name:'示例奖项'}],languages:[{language:'英语'}],
   });
   assert(!('resume_en' in exportedProfile));
+  byid('profile-email').value='draft@example.invalid';
+  nodes(root).find(e=>e.className==='profile-form').handlers.input();
+  run('window.confirm=()=>false');
+  run("setTab('tracking')");
+  assert.equal(run('tab'),'profile');
+  assert.equal(byid('profile-email').value,'draft@example.invalid');
+  await click('保存并导出填表资料 JSON');
+  assert.equal(JSON.parse(await downloads.at(-1).text()).profile.email,'draft@example.invalid');
+  assert.equal((await run("request('/api/state')")).profile.email,'draft@example.invalid');
+  const downloadCount=downloads.length;
+  await run("request('/api/profile',{...state.profile,resume_fields_version:1,profile_revision:state.profile_revision,email:'other-tab@example.invalid'})");
+  await click('导出填表资料 JSON');
+  assert.equal(downloads.length,downloadCount);
+  assert.equal(byid('profile-email').value,'other-tab@example.invalid');
+  assert(byid('status').textContent.includes('核对'));
+  await click('导出填表资料 JSON');
+  assert.equal(JSON.parse(await downloads.at(-1).text()).profile.email,'other-tab@example.invalid');
+  run("const profileFetch=fetch;let finishRead;fetch=async (...args)=>{const response=await profileFetch(...args);await new Promise(resolve=>finishRead=resolve);return response;}");
+  const pendingExport=click('导出填表资料 JSON');
+  for(let i=0;i<100&&!run('finishRead');i++)await new Promise(r=>setTimeout(r,10));
+  byid('profile-email').value='during-read@example.invalid';
+  run('fetch=profileFetch;finishRead()');
+  await pendingExport;
+  assert.equal(downloads.length,downloadCount+1);
+  assert.equal(byid('profile-email').value,'during-read@example.invalid');
+  assert.equal((await run("request('/api/state')")).profile.email,'other-tab@example.invalid');
+  run('window.confirm=()=>true');
   // The profile editor keeps one draft across sections. Import has separate review and save actions.
   await click('教育经历');
   assert.equal(run('profileSectionKey'),'education');

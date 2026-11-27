@@ -12,6 +12,7 @@ let pendingActions=0, pollActive=false, desktopAlerts=false;
 let captureDraft=null, applicationView='list';
 let state=emptyState(), tab='dashboard', currentEdit=null, companyEdit=null, sourceEdit=null, search='', statusFilter='', jobSearch='', jobRoute='', openOnly=true, generation=0;
 let resumeSchema;
+let profileHasChanges=null;
 const pages=['dashboard','discovery','tracking','profile'];
 
 function node(tag, cls='', ...children){
@@ -85,7 +86,10 @@ async function request(url,body){
   try{response=await fetch(url,init);}catch{throw new Error('无法连接本地服务。请检查启动窗口是否仍在运行。');}
   let obj;
   try{obj=await response.json();}catch{throw new Error('本地服务返回无法读取的结果。');}
-  if(!response.ok||obj?.error)throw new Error(typeof obj?.error==='string'?obj.error:'服务请求失败（'+response.status+'）。');
+  if(!response.ok||obj?.error){
+    const error=new Error(typeof obj?.error==='string'?obj.error:'服务请求失败（'+response.status+'）。');
+    error.status=response.status;throw error;
+  }
   return obj;
 }
 async function refresh(){
@@ -162,8 +166,17 @@ function bringCaptureIntoView(){
   section.scrollIntoView({block:'center'});
   qs('#job-company')?.focus({preventScroll:true});
 }
+function allowProfileExit(){
+  if(profileHasChanges?.()&&!window.confirm('资料有未保存的改动。确定放弃草稿并离开？取消可继续编辑。')){
+    if(location.hash!=='#profile')location.hash='profile';
+    return false;
+  }
+  profileHasChanges=null;
+  return true;
+}
 function setTab(next, focus=true){
   if(!pages.includes(next))return;
+  if(tab==='profile'&&(next==='profile'||!allowProfileExit()))return;
   tab=next;
   if(location.hash!=='#'+next)location.hash=next;
   clearMessages();render();
@@ -175,6 +188,7 @@ function goTrack(app){
   if(app) queueMicrotask(()=>qs('#editor')?.scrollIntoView({block:'start'}));
 }
 function render(){
+  if(tab==='profile'&&profileHasChanges?.())return;
   document.querySelectorAll('[data-tab]').forEach(x=>{
     const selected=x.dataset.tab===tab;
     x.classList.toggle('active',selected);
@@ -613,8 +627,8 @@ function profileRecordSection([key,title,item,fields,extra],saved,onEdit){
     read:data=>Array.from(rows,prefix=>Object.fromEntries(allFields.map(([name])=>[name,data[prefix+name]||'']))),
   };
 }
-function downloadProfile(){
-  const {resume_zh, resume_en, resume_details, ...shareable}=state.profile||{};
+function downloadProfile(saved){
+  const {resume_zh, resume_en, resume_details, ...shareable}=saved;
   const records={};
   for(const key of ['gender','political_status']){
     if(resume_details?.[key])records[key]=resume_details[key];
@@ -872,7 +886,9 @@ function profile(){
   const resume=p.resume_details||{};
   const additional=resumeSchema.sections.map(([title,fields])=>[title,[],fields.filter(([key])=>key!=='gender')]);
   const sections=[...profileSections,...profileExtraSections,...additional];
-  const groups=resumeSchema.records.map(definition=>profileRecordSection(definition,resume[definition[0]],()=>navigation.refresh(definition[0])));
+  const groups=resumeSchema.records.map(definition=>profileRecordSection(definition,resume[definition[0]],()=>{
+    navigation.refresh(definition[0]);updateExportLabel();
+  }));
   const section=([title,baseFields,resumeFields])=>node('section','profile-section',node('h3','',title),
     node('div','fields',profileInputs(baseFields,p),profileInputs(resumeFields,resume)));
   const answerObject=p.answers&&typeof p.answers==='object'&&!Array.isArray(p.answers)?p.answers:{};
@@ -888,8 +904,16 @@ function profile(){
     {key:'answers',title:'常见问题',view:node('section','profile-section',node('h3','','常见问题'),answerField)},
   ];
   const navigation=profileNavigator(panels);
-  const profileForm=form(navigation.viewport,f=>{
-    const d=actualData(f);const answers=Object.create(null);
+  let revision=state.profile_revision, saving=false;
+  const conflict=node('div','notice warn',
+    paragraph('另一页已保存资料。本页草稿仍在。打开最新版，对照两页，把需要保留的改动填到新页，再在那里保存。'),
+    link('在新标签页打开最新资料','/#profile','btn'));
+  conflict.hidden=true;conflict.tabIndex=-1;
+  async function saveProfile(exportAfter=false){
+    if(!conflict.hidden){conflict.focus();return;}
+    if(saving)return;
+    if(!profileForm.reportValidity())return;
+    const d=actualData(profileForm);const answers=Object.create(null);
     for(const l of d.answers.split('\n').map(x=>x.trim()).filter(Boolean)){
       const i=l.indexOf('=');if(i<1||!l.slice(i+1).trim())throw new Error('常见问题格式不正确。请使用「问题 = 答案」，一行一项。');
       const k=l.slice(0,i).trim();if(!k)throw new Error('常见问题不能为空。');
@@ -898,13 +922,55 @@ function profile(){
     const base=Object.fromEntries(sections.flatMap(([,fields])=>fields.map(([key])=>[key,d[key]])));
     const resumeDetails=Object.fromEntries(sections.flatMap(([, ,fields])=>fields.map(([key])=>[key,d[key]])));
     for(const group of groups)resumeDetails[group.key]=group.read(d);
-    return mutate('/api/profile',{...base,answers,resume_fields_version:1,resume_details:resumeDetails},'资料已保存到本地。');
-  },'保存资料',navigation.nextMissing);
+    saving=true;
+    try{
+      const saved=await request('/api/profile',{...base,answers,resume_fields_version:1,resume_details:resumeDetails,profile_revision:revision});
+      revision=saved.profile_revision;
+      baseline=JSON.stringify(d);
+      if(state.profile_revision<=revision){
+        state.profile=saved.profile;state.profile_revision=revision;
+      }
+      if(profileHasChanges!==hasChanges)return;
+      if(hasChanges()){
+        updateExportLabel();
+        announce('已保存提交时的资料。刚输入的改动仍在草稿中，请再次保存。');return;
+      }
+      render();
+      if(exportAfter)downloadProfile(saved.profile);
+      else announce('资料已保存到本地。');
+    }catch(error){
+      if(error.status!==409)throw error;
+      conflict.hidden=false;conflict.focus();
+      announce(error.message,true);
+    }finally{saving=false;}
+  }
+  const profileForm=form(navigation.viewport,()=>saveProfile(),'保存资料',navigation.nextMissing);
   profileForm.className='profile-form';
+  let baseline=JSON.stringify(actualData(profileForm));
+  const hasChanges=()=>JSON.stringify(actualData(profileForm))!==baseline;
+  profileHasChanges=hasChanges;
+  const exportButton=btn('导出填表资料 JSON',async ()=>{
+    if(!conflict.hidden){conflict.focus();return;}
+    if(hasChanges()){
+      if(exportButton.textContent==='导出填表资料 JSON'&&!window.confirm('资料有未保存的改动。保存并导出当前资料？'))return;
+      return saveProfile(true);
+    }
+    const latest=await request('/api/state');
+    if(profileHasChanges!==hasChanges)return;
+    if(hasChanges()){updateExportLabel();announce('资料有新改动，请点击「保存并导出填表资料 JSON」。');return;}
+    if(latest.profile_revision!==revision){
+      state.profile=latest.profile;state.profile_revision=latest.profile_revision;
+      render();announce('资料已在另一页更新。已显示最新内容，请核对后再次点击导出。');return;
+    }
+    downloadProfile(latest.profile);
+  });
+  function updateExportLabel(){exportButton.textContent=hasChanges()?'保存并导出填表资料 JSON':'导出填表资料 JSON';}
+  profileForm.addEventListener('input',updateExportLabel);
+  profileForm.addEventListener('change',updateExportLabel);
   const header=node('header','resume-page-heading',node('div','',node('h1','','我的简历'),paragraph('在本机整理网申资料，按栏目编辑与保存。','meta')),
-    node('div','actions',link('预览下拉选项','/demo-form.html?preview=select','btn'),btn('导出填表资料 JSON',downloadProfile)));
-  return [header,
-    resumeImportCard(profileForm,sections,groups,()=>navigation.refresh()),
+    node('div','actions',link('预览下拉选项','/demo-form.html?preview=select','btn'),exportButton));
+  return [header,conflict,
+    resumeImportCard(profileForm,sections,groups,()=>{navigation.refresh();updateExportLabel();}),
     node('div','profile-editor',navigation.view,node('section','card resume-sheet',profileForm)),
     node('div','grid equal',
       card('分条填表预览',paragraph('导出的资料可在浏览器扩展中逐条预览。证件、家庭和证明人资料留在本机。','meta'),
@@ -931,8 +997,12 @@ function ocrCard(){
 }
 for(const b of document.querySelectorAll('[data-tab]'))b.addEventListener('click',()=>setTab(b.dataset.tab));
 window.addEventListener('hashchange',()=>{
+  if(tab==='profile'&&location.hash.startsWith('#discovery?capture=')&&!allowProfileExit())return;
   if(captureFromHash()){render();bringCaptureIntoView();return;}
   const next=location.hash.slice(1);if(pages.includes(next)&&next!==tab)setTab(next);
+});
+window.addEventListener('beforeunload',event=>{
+  if(profileHasChanges?.()){event.preventDefault();event.returnValue='';}
 });
 const startupCapture=captureFromHash();
 updateClock();setInterval(updateClock,60_000);setInterval(pollDashboard,25_000);
