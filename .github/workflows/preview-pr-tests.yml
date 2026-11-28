@@ -4,6 +4,7 @@ run-name: "Preview PR #${{ github.event.pull_request.number }} (${{ github.event
 on:
   pull_request:
     branches: [preview/workflows-1.0.2]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
