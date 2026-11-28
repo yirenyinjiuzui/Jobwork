@@ -659,6 +659,17 @@ class Store:
             source_map={r['id']:r for r in self.rows(db,'SELECT * FROM sources')}
             reviews={int(r['key'].split(':')[1]):json.loads(r['value']) for r in db.execute("SELECT key,value FROM settings WHERE key LIKE 'source_review:%'")}
             polls={int(r['key'].split(':')[1]):r['value'] for r in db.execute("SELECT key,value FROM settings WHERE key LIKE 'source_check:%'")}
+            # Keep the original catalogue ordering and cap candidates at nine:
+            # at most one entry is the current job, leaving eight other matches.
+            title_index, req_index, identity_keys = {}, {}, {}
+            for pos, job in enumerate(jobs):
+                company=normalized(job['company'])
+                title_key=(company,normalized(job['title']),normalized(job['location']))
+                req_key=(company,normalized(job['requisition']))
+                identity_keys[job['id']]=(pos,title_key,req_key)
+                for index,key in ((title_index,title_key),(req_index,req_key)):
+                    matches=index.setdefault(key,[])
+                    if len(matches)<9:matches.append(pos)
             for job in jobs:
                 src=source_map.get(job['board_id'])
                 if src and src['provider']!='demo':
@@ -672,10 +683,11 @@ class Store:
                         'message':('本次暂不可核实；保留最后记录状态。' if uncertain else '本次接口返回了此岗位。')+' 最后记录：'+('开放' if job['active'] else '关闭')+'；上次接口见到：'+(last or '旧记录未记录时间'),
                         'closure_evidence':info.get('closure_evidence',{}).get(str(job['id'])),
                         'close_token':info.get('token') if pending and polls.get(src['id'])==info.get('token') else ''}
-                similar=[other['id'] for other in jobs if other['id']!=job['id'] and
-                    normalized(other['company'])==normalized(job['company']) and
-                    ((normalized(other['title'])==normalized(job['title']) and normalized(other['location'])==normalized(job['location'])) or
-                     (job['requisition'] and normalized(other['requisition'])==normalized(job['requisition'])))]
+                pos,title_key,req_key=identity_keys[job['id']]
+                candidates=set(title_index[title_key])
+                if job['requisition']:candidates.update(req_index[req_key])
+                candidates.discard(pos)
+                similar=[jobs[i]['id'] for i in sorted(candidates)[:8]]
                 job['identity_review']=('相似岗位或编号重复，已分别保留；请核对来源和职责后分别记录。相关条目：'+', '.join(map(str,similar[:8]))) if similar else ''
             return dict(applications=apps,today=prioritize(apps),**profile,
                 companies=self.rows(db,'SELECT * FROM companies ORDER BY name'),

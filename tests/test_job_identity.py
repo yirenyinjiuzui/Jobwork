@@ -1,7 +1,7 @@
 from pathlib import Path
 import tempfile,unittest
 from unittest.mock import patch
-from workbench import Store
+from workbench import Store, normalized
 from discovery import fetch_jobs
 from tracker import parse_notice
 
@@ -9,6 +9,30 @@ class IdentityTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.s=Store(Path(self.temp.name)/'test.sqlite3')
   self.base=dict(company='Fictional Identity Lab',title='Data Intern',location='Hong Kong',url='https://example.invalid/jobs/A',requisition='R-1',description='Analyze synthetic A data')
+ def test_identity_review_preserves_order_and_scales_with_catalogue_size(self):
+  # Distinct source IDs, overlap by both keys, cross-company distractors,
+  # and more than eight matches; compare against the original rule.
+  with self.s.connect(True) as db:
+   for n in range(260):
+    job={**self.base,'company':'Other' if n%7==0 else 'Ｆictional Identity Lab',
+         'title':'Data Intern' if n%3==0 else f'Role {n}',
+         'location':'Hong Kong' if n%5 else 'Shenzhen',
+         'requisition':'Ｒ-1' if n%4==0 else '',
+         'url':f'https://example.invalid/scale/{n}'}
+    from discovery import manual_job
+    self.s.put_job(db,manual_job(job))
+   db.execute('UPDATE jobs SET active=0 WHERE id%11=0')
+  with patch('workbench.normalized', wraps=normalized) as normalize:
+   jobs=self.s.state()['jobs']
+  for job in jobs:
+   expected=[str(other['id']) for other in jobs if other['id']!=job['id'] and
+    normalized(other['company'])==normalized(job['company']) and
+    ((normalized(other['title'])==normalized(job['title']) and normalized(other['location'])==normalized(job['location'])) or
+     (job['requisition'] and normalized(other['requisition'])==normalized(job['requisition'])))]
+   actual=job['identity_review']
+   self.assertEqual(actual.split('相关条目：')[-1] if actual else '',', '.join(expected[:8]))
+  self.assertLessEqual(normalize.call_count,5*len(jobs))
+
  def test_manual_cross_board_reused_id_separate_and_tracking_duplicate(self):
   a=self.s.save_job(self.base);b=self.s.save_job({**self.base,'url':'https://another.invalid/jobs/A','description':'Build synthetic B tools'})
   self.assertNotEqual(a['id'],b['id']);again=self.s.save_job({**self.base,'url':self.base['url']+'?utm_source=test#top','description':'Updated A'})
