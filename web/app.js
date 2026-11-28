@@ -10,6 +10,8 @@ const providerLabels = {greenhouse:'Greenhouse', greenhouse_eu:'Greenhouse 欧�
 const emptyState = () => ({applications:[],companies:[],sources:[],jobs:[],notifications:[],today:[],profile:{}});
 let pendingActions=0, pollActive=false, desktopAlerts=false;
 let captureDraft=null, applicationView='list';
+const applicationPageSize=150;
+let applicationLimit=applicationPageSize;
 let state=emptyState(), tab='dashboard', currentEdit=null, companyEdit=null, sourceEdit=null, search='', statusFilter='', jobSearch='', jobRoute='', openOnly=true, generation=0;
 let resumeSchema;
 const pages=['dashboard','discovery','tracking','profile'];
@@ -325,7 +327,7 @@ function tracking(){
   const a=state.applications.find(a=>equalId(a.id,currentEdit))||{};
   const searchField=field('app-filter','search','搜索记录',{kind:'search',value:search,placeholder:'输入公司、岗位或编号'});
   const filterField=field('app-filter','status','当前状态',{kind:'select',value:statusFilter,options:[['','全部状态'],...Object.entries(statusLabels)]});
-  const holder=node('div');holder.id='application-results';
+  const holder=node('div');holder.id='application-results';holder.tabIndex=-1;
   const switches=['list','board'].map(view=>{
     const b=btn(view==='list'?'列表':'看板',()=>{
       applicationView=view;
@@ -338,8 +340,8 @@ function tracking(){
   });
   const viewPicker=node('div','view-switch',switches);viewPicker.setAttribute('role','group');viewPicker.setAttribute('aria-label','投递查看方式');
   renderApplications(holder);
-  qs('input',searchField).addEventListener('input',e=>{search=e.target.value;renderApplications(holder);});
-  qs('select',filterField).addEventListener('change',e=>{statusFilter=e.target.value;renderApplications(holder);});
+  qs('input',searchField).addEventListener('input',e=>{search=e.target.value;applicationLimit=applicationPageSize;renderApplications(holder);});
+  qs('select',filterField).addEventListener('change',e=>{statusFilter=e.target.value;applicationLimit=applicationPageSize;renderApplications(holder);});
   const resumeExamples=[state.profile?.resume_zh,state.profile?.resume_en].filter(Boolean)
     .map(x=>String(x).split(/[\\/]/).filter(Boolean).slice(-1)[0]).filter(Boolean);
   const editorCalendar=node('div','calendar-action',calendarContents(a));editorCalendar.id='editor-calendar';
@@ -369,14 +371,24 @@ function tracking(){
 function renderApplications(target){
   const q=search.trim().toLowerCase();
   const rows=state.applications.filter(a=>(!statusFilter||a.status===statusFilter)&&(!q||[a.company,a.title,a.requisition,a.location].join(' ').toLowerCase().includes(q)));
-  target.replaceChildren(shortMeta('匹配 '+rows.length+' 条记录'+(rows.length>150?' · 显示前 150 条':'')));
+  const visible=rows.slice(0,applicationLimit);
+  target.replaceChildren(shortMeta('匹配 '+rows.length+' 条记录'+(visible.length<rows.length?' · 已显示 '+visible.length+' 条':'')));
   if(!rows.length){target.append(empty('暂无匹配的投递。先建立一条投递记录，或导入模拟数据。'));return;}
-  if(applicationView==='board'){target.append(applicationBoard(rows.slice(0,150),target));return;}
-  target.append(list(rows.slice(0,150).map(a=>row([node('strong','',a.title),' ',badge(statusName(a.status),a.status),
+  if(applicationView==='board')target.append(applicationBoard(visible,target));
+  else target.append(list(visible.map(a=>row([node('strong','',a.title),' ',badge(statusName(a.status),a.status),
     shortMeta(a.company,a.location,a.requisition?'编号 '+a.requisition:null,a.resume_label?'简历 '+a.resume_label:null),
     a.assessment_tasks?.length?details('各测评状态',list(a.assessment_tasks.map(t=>paragraph(t.id+'：'+(t.completed?'已完成，等待结果':'待完成')+(t.deadline?' · '+t.deadline+' · '+(t.precision==='estimated'?'估算':'原记录时间'):''),'meta')))):null,
     shortMeta(a.next_action,stamp(a,'deadline','截止'),stamp(a,'interview_at','面试'))],
     link('来源',a.source_url,'btn small'),calendarLink(a),editApplicationButton(a)))));
+  if(visible.length<rows.length){
+    const more=btn('显示更多投递',()=>{
+      applicationLimit+=applicationPageSize;
+      renderApplications(target);
+      (qs('#application-more',target)||target).focus({preventScroll:true});
+    },'small');
+    more.id='application-more';
+    target.append(node('div','actions',more));
+  }
 }
 function editApplicationButton(a){
   return btn('查看／修改',()=>{currentEdit=a.id;render();qs('#editor')?.scrollIntoView();qs('#app-company')?.focus({preventScroll:true});},'small');
