@@ -28,6 +28,23 @@ class CompletionTests(unittest.TestCase):
   self.assertEqual(r['application']['status'],'assessment');self.assertEqual(r['application']['deadline'],'2026-11-12T10:00+08:00')
   tasks={t['id']:t for t in self.s.state()['applications'][0]['assessment_tasks']};self.assertTrue(tasks['A-1']['completed']);self.assertFalse(tasks['B-2']['completed'])
   r=self.apply(mail(task='B-2',day=5,complete=True),assessment_completion_confirmed=True);self.assertEqual(r['application']['status'],'waiting');self.assertFalse(r['application']['deadline'])
+ def test_same_day_exact_assessment_deadline_precedes_date_only(self):
+  identity=dict(company=BASE['company'],requisition=BASE['requisition'])
+  for task,deadline,sent in [('A-1','2026-11-10','2026-11-02T10:00+08:00'),
+                             ('B-2','2026-11-10 10:00 HKT','2026-11-03T10:00+08:00')]:
+   notice=parse_notice(f'Assessment ID: {task}\nOnline assessment. Deadline: {deadline}.',sent,**identity)
+   self.assertTrue(self.apply(notice)['applied'])
+  row=self.s.applications()[0]
+  self.assertEqual(row['deadline'],'2026-11-10T10:00+08:00')
+  self.assertEqual(row['date_precision']['deadline'],'exact')
+  self.assertEqual({t['id']:t['deadline'] for t in self.s.state()['applications'][0]['assessment_tasks']},
+                   {'A-1':'2026-11-10','B-2':'2026-11-10T10:00+08:00'})
+  receipt=parse_notice('Assessment ID: B-2\nYour online assessment has been successfully completed.',
+                       '2026-11-04T10:00+08:00',**identity)
+  self.assertTrue(self.apply(receipt,assessment_completion_confirmed=True)['applied'])
+  row=self.s.applications()[0]
+  self.assertEqual(row['deadline'],'2026-11-10')
+  self.assertEqual(row['date_precision']['deadline'],'date')
  def test_duplicate_and_old_or_new_extension_never_reopen_completed(self):
   self.apply(mail());n=mail(day=4,complete=True);self.apply(n,assessment_completion_confirmed=True)
   self.assertTrue(self.apply(n,assessment_completion_confirmed=True)['duplicate'])

@@ -607,7 +607,11 @@ class Store:
                 tasks[task_key]=task
                 if not old or old['status'] in ('saved','submitted','waiting','assessment'):
                     pending=[t for t in tasks.values() if not t['completed']]
-                    dated=sorted((t for t in pending if _utc(t['deadline'])),key=lambda t:_utc(t['deadline']))
+                    # Compare deadlines using the same end-of-day convention as the
+                    # dashboard; date-only notices must not hide an exact cutoff
+                    # on that date. Preserve the original raw value and precision.
+                    dated=sorted((t for t in pending if at(t['deadline'])),
+                                 key=lambda t:(at(t['deadline']),len(t['deadline'])==10))
                     merged['status']='assessment' if pending else 'waiting'
                     merged['deadline']=dated[0]['deadline'] if dated else ''
                     merged.setdefault('date_precision',{}).pop('deadline',None)
