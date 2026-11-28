@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
     def export(self):
         output=io.StringIO()
         writer=csv.writer(output)
-        fields=('company','title','requisition','location','career_type','status','deadline','interview_at','next_action','source_url','resume_label','updated_at')
+        fields=('company','title','requisition','location','career_type','status','deadline','interview_at','next_action','source_url','resume_label','updated_at','submitted_at')
         writer.writerow(fields)
         def safe_cell(value):
             value=str(value or '')
