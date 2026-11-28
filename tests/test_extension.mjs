@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-import { loadProfile, makePlan, matchField, textSuggestions } from '../extension/matcher.mjs';
+import { loadProfile, makePlan, keptComparisons, matchField, textSuggestions } from '../extension/matcher.mjs';
 import { inspectPage } from '../extension/page.mjs';
 
 const SAMPLE_PROFILE = { profile: {
@@ -326,6 +326,63 @@ test('structured import keeps supported keys and leaves ambiguous dates and dupl
   const meta={kind:'certificates',number:1,count:1};
   assert(makePlan([field('证书名称',{record:meta}),field('证书名称',{record:meta}),field('取得年月',{type:'month',record:meta})],demo)
     .every(row=>!row.match));
+});
+
+test('kept comparisons return booleans for unique ordinary records without consuming fill consent', () => {
+  const {nodes,FakeInput,url}=mockedDOM();
+  const group={querySelector:()=>({innerText:'工作经历 第1条'}),getAttribute:()=>''};
+  for (const [label,value] of [['工作单位','网页原值标记'],['工作岗位','工程师'],['工作部门','']]) {
+    const node=new FakeInput(label,{value});
+    node.closest=selector=>selector.startsWith('fieldset') ? group : null;
+    nodes.push(node);
+  }
+  const profile=loadProfile({resume_details:{work_experience:[{company:'资料单位',role:'工程师',department:'研发'}]}});
+  const scan=inspectPage('scan');
+  const checks=keptComparisons(scan.fields,profile);
+  assert.deepEqual(checks.map(c=>c.index),[0,1]);
+  const result=inspectPage('compare-kept',checks,url.href,scan.session);
+  assert.deepEqual(result,{comparisons:[{index:0,same:false},{index:1,same:true}]});
+  assert(!JSON.stringify(scan).includes('网页原值标记'));
+  assert.deepEqual(makePlan(scan.fields,profile).filter(r=>r.match).map(r=>r.field.index),[2]);
+  const [,,department]=scan.fields;
+  assert.equal(inspectPage('fill',[{index:2,token:department.token,value:'研发'}],url.href,scan.session).filled,1);
+  assert.deepEqual(nodes.map(n=>n.value),['网页原值标记','工程师','研发']);
+  assert.match(inspectPage('compare-kept',checks,url.href,scan.session).error,/重新扫描/);
+});
+
+test('ambiguous, locked, sensitive and unsupported kept fields have no comparison status', () => {
+  const base={index:0,type:'text',label:'工作单位',hasValue:true,record:{kind:'work_experience',number:1,count:1}};
+  const profile=loadProfile({resume_details:{work_experience:[{company:'示例单位'}]}});
+  for (const patch of [{disabled:true},{readonly:true},{auth:true},{type:'select'},{type:'password'},
+      {name:'身份证号'},{autocomplete:'one-time-code'},{aria:'无法识别的字段'},{record:{...base.record,uncertain:true}},
+      {record:{...base.record,count:2}}]) {
+    assert.deepEqual(keptComparisons([{...base,...patch}],profile),[]);
+  }
+  assert.deepEqual(keptComparisons([base,{...base,index:1}],profile),[]);
+  assert.deepEqual(keptComparisons([base,{...base,index:1,hasValue:false}],profile),[]);
+});
+
+test('scan metadata strips form controls from wrapping and ARIA-referenced labels', () => {
+  const {nodes,FakeInput}=mockedDOM();
+  const marker='synthetic existing textarea content';
+  const node=new FakeInput('职责与成果',{type:'textarea',tagName:'TEXTAREA',value:marker,attrs:{'aria-labelledby':'wrapped'}});
+  const label={
+    innerText:'职责与成果 '+marker, textContent:'职责与成果 '+marker,
+    querySelector:()=>node,
+    cloneNode() {
+      const copy={textContent:this.textContent};
+      copy.querySelectorAll=()=>[{remove:()=>{copy.textContent='职责与成果';}}];
+      return copy;
+    },
+  };
+  node.labels=[label];
+  document.getElementById=id=>id==='wrapped' ? label : null;
+  nodes.push(node);
+  const scan=inspectPage('scan');
+  assert.equal(scan.fields[0].label,'职责与成果');
+  assert.equal(scan.fields[0].aria,'职责与成果');
+  assert(!JSON.stringify(scan).includes(marker));
+  assert.equal(node.value,marker);
 });
 
 test('work, campus, award and language records map independently by number', () => {

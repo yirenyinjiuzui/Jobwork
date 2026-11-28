@@ -14,6 +14,7 @@ const applicationPageSize=150;
 let applicationLimit=applicationPageSize;
 let state=emptyState(), tab='dashboard', currentEdit=null, companyEdit=null, sourceEdit=null, search='', statusFilter='', jobSearch='', jobRoute='', openOnly=true, generation=0;
 let resumeSchema;
+let profileHasChanges=null;
 const pages=['dashboard','discovery','tracking','profile'];
 
 function node(tag, cls='', ...children){
@@ -87,7 +88,10 @@ async function request(url,body){
   try{response=await fetch(url,init);}catch{throw new Error('无法连接本地服务。请检查启动窗口是否仍在运行。');}
   let obj;
   try{obj=await response.json();}catch{throw new Error('本地服务返回无法读取的结果。');}
-  if(!response.ok||obj?.error)throw new Error(typeof obj?.error==='string'?obj.error:'服务请求失败（'+response.status+'）。');
+  if(!response.ok||obj?.error){
+    const error=new Error(typeof obj?.error==='string'?obj.error:'服务请求失败（'+response.status+'）。');
+    error.status=response.status;throw error;
+  }
   return obj;
 }
 async function refresh(){
@@ -164,8 +168,17 @@ function bringCaptureIntoView(){
   section.scrollIntoView({block:'center'});
   qs('#job-company')?.focus({preventScroll:true});
 }
+function allowProfileExit(){
+  if(profileHasChanges?.()&&!window.confirm('资料有未保存的改动。确定放弃草稿并离开？取消可继续编辑。')){
+    if(location.hash!=='#profile')location.hash='profile';
+    return false;
+  }
+  profileHasChanges=null;
+  return true;
+}
 function setTab(next, focus=true){
   if(!pages.includes(next))return;
+  if(tab==='profile'&&(next==='profile'||!allowProfileExit()))return;
   tab=next;
   if(location.hash!=='#'+next)location.hash=next;
   clearMessages();render();
@@ -177,6 +190,7 @@ function goTrack(app){
   if(app) queueMicrotask(()=>qs('#editor')?.scrollIntoView({block:'start'}));
 }
 function render(){
+  if(tab==='profile'&&profileHasChanges?.())return;
   document.querySelectorAll('[data-tab]').forEach(x=>{
     const selected=x.dataset.tab===tab;
     x.classList.toggle('active',selected);
@@ -197,12 +211,13 @@ function precisionLabel(record,key){
   return '';
 }
 function stamp(record,key,label){return record[key]?label+' '+niceDate(record[key])+precisionLabel(record,key):'';}
+function deadlineStamp(a){return a.status==='interview'?stamp(a,'interview_reply_by','面试回复截止'):stamp(a,'deadline','截止');}
 function calendarContents(a){
   const l=calendarLink(a);return l?[l,paragraph('导出 .ics 文件，不自动同步。','subtle')]:[];
 }
 function calendarLink(a){
   if(!/^[1-9]\d*$/.test(String(a.id)))return null;
-  if(!((['saved','assessment','interview','offer'].includes(a.status)&&a.deadline)||(a.status==='interview'&&a.interview_at)))return null;
+  if(!((['saved','assessment','offer'].includes(a.status)&&a.deadline)||(a.status==='interview'&&(a.interview_at||a.interview_reply_by))))return null;
   const l=link('导出日历 (.ics)','/api/calendar?id='+encodeURIComponent(a.id),'btn small');
   l.removeAttribute('target');l.title='下载文件，不自动同步日历';return l;
 }
@@ -240,7 +255,7 @@ function dashboard(){
   const taskRows=todos.slice(0,8).map(a=>{
     const why=typeof a.reason==='string'?a.reason:'';
     const target=a.next_action||({assessment:'查看网测要求',interview:'准备面试',saved:'决定是否投递'}[a.status]||'查看进展');
-    return row([node('strong','',target),shortMeta(a.company,a.title),shortMeta(why||null,stamp(a,'deadline','截止'),stamp(a,'interview_at','面试')),badge(statusName(a.status),a.status)],calendarLink(a),btn('看记录',()=>goTrack(a),'small'));
+    return row([node('strong','',target),shortMeta(a.company,a.title),shortMeta(why||null,deadlineStamp(a),stamp(a,'interview_at','面试')),badge(statusName(a.status),a.status)],calendarLink(a),btn('看记录',()=>goTrack(a),'small'));
   });
   const alertRows=state.notifications.slice(0,12).map(n=>row([node('strong','',n.title||'岗位更新'),n.read?null:' ',n.read?null:badge('新','active'),n.body?paragraph(n.body,'meta'):null,shortMeta(n.created_at?niceDate(n.created_at):'')],link('原始入口',n.url,'btn small'),n.read?null:btn('标为已读',()=>mutate('/api/notifications/read',{id:n.id},'已标为已读。'),'small')));
   return [head('工作台 / 01','今天先做什么','开招、网测、面试与下一步放在同一个地方。',[btn('+ 记一笔投递',()=>{currentEdit=null;goTrack(null);queueMicrotask(()=>qs('#editor')?.scrollIntoView());},'primary')]),counts,node('div','grid',card('优先处理',paragraph('根据记录里的日期和当前状态安排，等回复的岗位无需反复翻查。','meta'),taskRows.length?list(taskRows):empty('暂无需要处理的事项。添加投递记录，或导入一封网测、面试通知。'),todos.length>8?paragraph('其余记录可在投递追踪查看。','subtle'):null),card('岗位提醒',paragraph('首次成功检查只建立基线，以后发现新岗位或重新开放时，会在这里提示。启动本机程序后才会轮询。','meta'),typeof Notification!=='undefined'&&!desktopAlerts?btn('开启桌面提醒（本页）',enableDesktopAlerts,'small'):null,alertRows.length?list(alertRows):empty('还没有开招提醒。请先在「公司与岗位」添加招聘来源。'),unread.length?node('div','actions',btn('全部标为已读',()=>mutate('/api/notifications/read',{},'已标记全部提醒为已读。'),'small')):null)),state.applications.length===0?card('先试用模拟数据',paragraph('不会读取真实邮箱，也不会联系招聘方。'),btn('载入演示记录',()=>mutate('/api/demo',{},'演示记录已加载。'))):null];
@@ -303,10 +318,17 @@ function checkMessage(r){
   const uncertain=results.reduce((sum,x)=>sum+Number(x.unverified||0),0);
   return '检查结束：'+(openings?'发现 '+openings+' 个新开或重新开放岗位；':'没有新开或重新开放岗位；')+(baseline?' '+baseline+' 个来源已建立基线；':'')+(uncertain?' 有 '+uncertain+' 项暂不可核实，保留最后状态；':'')+(errors.length?' '+errors.length+' 个来源失败，具体原因见来源列表。':'可在总览查看提醒。');
 }
+function recordSearch(query){
+  const normalize=value=>String(value??'').normalize('NFKC').toLowerCase();
+  const terms=normalize(query).trim().split(/\s+/).filter(Boolean);
+  return record=>{
+    const fields=[record.company,record.title,record.location,record.requisition].map(normalize);
+    return terms.every(term=>fields.some(value=>value.includes(term)));
+  };
+}
 function renderJobs(target){
-  const q=jobSearch.trim().toLowerCase();
   const pool=state.jobs.filter(j=>!openOnly||j.active!==false&&j.active!==0)
-    .filter(j=>!q||[j.company,j.title,j.location,j.requisition].join(' ').toLowerCase().includes(q));
+    .filter(recordSearch(jobSearch));
   const rows=pool.filter(j=>jobRoute==='hk'?j.career_type==='intern'&&j.location_review?.hk_onsite===true:jobRoute==='cn'?j.career_type==='graduate'&&(['mainland','both'].includes(j.region)||!j.region&&mainlandCandidate(j.location)):!jobRoute||j.career_type===jobRoute);
   const review=jobRoute==='hk'?pool.filter(j=>j.career_type==='intern'&&j.location_review?.requires_review):[];
   target.replaceChildren(shortMeta((jobRoute==='hk'?'正文支持香港实地实习 ':'匹配 ')+rows.length+' 个岗位'+(rows.length>120?' · 显示前 120 个':'')));
@@ -354,12 +376,23 @@ function tracking(){
       field('app','career_type','岗位类型',{kind:'select',value:a.career_type||'other',options:Object.entries(typeLabels)}),
       field('app','status','当前状态',{kind:'select',value:a.status||'saved',options:Object.entries(statusLabels)}),
       field('app','submitted_at','实际投递时间（香港，可留空）',{value:fieldDate(a.submitted_at),placeholder:'2026-11-01 10:00',hint:'填写实际提交申请的时间；不是录入时间或面试时间。不确定请留空。'}),
-      field('app','deadline','截止时间（香港）',{value:fieldDate(a.deadline),placeholder:'2026-12-01 或 2026-12-01 18:00'}),
+      field('app','deadline','申请或其他流程截止（香港）',{value:fieldDate(a.deadline),placeholder:'2026-12-01 或 2026-12-01 18:00',hint:a.status==='interview'&&a.deadline?'原截止保留供核对。如果招聘方要求限时回复，请填写面试回复期限。':''}),
       field('app','interview_at','面试时间（香港）',{value:fieldDate(a.interview_at),placeholder:'2026-12-01 18:00'}),
+      field('app','interview_reply_by','面试回复期限（香港，可留空）',{value:fieldDate(a.interview_reply_by),placeholder:'2026-12-01 或 2026-12-01 18:00'}),
       field('app','resume_label','实际使用的简历版本',{value:a.resume_label,full:true,placeholder:'例如：英文简历 v3',hint:resumeExamples.length?'资料库版本：'+resumeExamples.join('、'):'只记版本名，不上传文件。'}),
       field('app','next_action','下一步',{value:a.next_action,full:true,placeholder:'例如：完成网测；等待回复'}),
       field('app','source_url','来源链接',{kind:'url',value:a.source_url,full:true,placeholder:'https://…'})),
-      f=>{const d=actualData(f);if(a.id){d.id=a.id;for(const k of ['deadline','interview_at','submitted_at']){if(d[k]===fieldDate(a[k]))delete d[k];}}return mutate('/api/application',d,'投递记录已保存。',r=>{currentEdit=r.application?.id||r.id||a.id||null;});},a.id?'保存修改':'添加记录',
+      f=>{
+        const d=actualData(f);
+        if(a.id){
+          d.id=a.id;
+          const saved=state.applications.find(row=>equalId(row.id,a.id))||a;
+          for(const k of ['deadline','interview_at','interview_reply_by','submitted_at']){
+            if(d[k]===fieldDate(saved[k]))delete d[k];
+          }
+        }
+        return mutate('/api/application',d,'投递记录已保存。',r=>{currentEdit=r.application?.id||r.id||a.id||null;});
+      },a.id?'保存修改':'添加记录',
       a.id?[btn('切换到新增',()=>{currentEdit=null;render();qs('#app-company')?.focus();})]:[]),
     editorCalendar,
     a.id?historyDetails(a):null);
@@ -369,8 +402,7 @@ function tracking(){
     card('全部投递',node('div','inline',searchField,filterField,viewPicker),holder)];
 }
 function renderApplications(target){
-  const q=search.trim().toLowerCase();
-  const rows=state.applications.filter(a=>(!statusFilter||a.status===statusFilter)&&(!q||[a.company,a.title,a.requisition,a.location].join(' ').toLowerCase().includes(q)));
+  const rows=state.applications.filter(a=>!statusFilter||a.status===statusFilter).filter(recordSearch(search));
   const visible=rows.slice(0,applicationLimit);
   target.replaceChildren(shortMeta('匹配 '+rows.length+' 条记录'+(visible.length<rows.length?' · 已显示 '+visible.length+' 条':'')));
   if(!rows.length){target.append(empty('暂无匹配的投递。先建立一条投递记录，或导入模拟数据。'));return;}
@@ -378,7 +410,7 @@ function renderApplications(target){
   else target.append(list(visible.map(a=>row([node('strong','',a.title),' ',badge(statusName(a.status),a.status),
     shortMeta(a.company,a.location,a.requisition?'编号 '+a.requisition:null,a.resume_label?'简历 '+a.resume_label:null),
     a.assessment_tasks?.length?details('各测评状态',list(a.assessment_tasks.map(t=>paragraph(t.id+'：'+(t.completed?'已完成，等待结果':'待完成')+(t.deadline?' · '+t.deadline+' · '+(t.precision==='estimated'?'估算':'原记录时间'):''),'meta')))):null,
-    shortMeta(a.next_action,stamp(a,'deadline','截止'),stamp(a,'interview_at','面试'))],
+    shortMeta(a.next_action,deadlineStamp(a),stamp(a,'interview_at','面试'))],
     link('来源',a.source_url,'btn small'),calendarLink(a),editApplicationButton(a)))));
   if(visible.length<rows.length){
     const more=btn('显示更多投递',()=>{
@@ -414,6 +446,8 @@ function applicationBoard(applications,target){
           if(equalId(currentEdit,a.id)){
             const statusSelect=qs('#app-status');
             if(statusSelect?.value===a.status)statusSelect.value=updated?.status||next;
+            const reply=qs('#app-interview_reply_by');
+            if(updated&&reply?.value===fieldDate(a.interview_reply_by))reply.value=fieldDate(updated.interview_reply_by);
             qs('#editor-calendar')?.replaceChildren(...calendarContents(updated||{...a,status:next}));
           }
           renderApplications(target);
@@ -425,7 +459,7 @@ function applicationBoard(applications,target){
       select.addEventListener('change',()=>{update.disabled=select.value===a.status;});
       return node('li','board-item',node('strong','board-title',a.title),shortMeta(a.company,a.location,a.requisition,a.resume_label?'简历 '+a.resume_label:null),
         a.assessment_tasks?.length?details('各测评状态',list(a.assessment_tasks.map(t=>paragraph(t.id+'：'+(t.completed?'已完成，等待结果':'待完成')+(t.deadline?' · '+t.deadline+' · '+(t.precision==='estimated'?'估算':'原记录时间'):''),'meta')))):null,
-    shortMeta(a.next_action,stamp(a,'deadline','截止'),stamp(a,'interview_at','面试')),
+    shortMeta(a.next_action,deadlineStamp(a),stamp(a,'interview_at','面试')),
         node('div','actions',editApplicationButton(a),calendarLink(a)),node('div','board-update',changeStatus,update));
     })):paragraph('暂无记录','board-empty'));
     run.setAttribute('aria-labelledby',title.id);return run;
@@ -480,12 +514,13 @@ function noticeCard(app){
 function renderPreview({token,notice:n,match:m}){
   if(!n||!token)throw new Error('没有收到有效的预览结果。');
   const rows=state.applications||[];
-  const options=[['','请选择对应岗位或新建'],['__new','新建投递记录'],...rows.map(a=>[String(a.id),a.company+' / '+a.title+(a.requisition?' · '+a.requisition:'')])];
+  const options=n.assessment_completion?[['','请选择对应的已有投递']]:[['','请选择对应岗位或新建'],['__new','新建投递记录']];
+  options.push(...rows.map(a=>[String(a.id),a.company+' / '+a.title+(a.requisition?' · '+a.requisition:'')]));
   const exact=rows.find(a=>equalId(a.id,m?.match_id));
   const selection=exact&&!m?.ambiguous?String(exact.id):'';
   const title=node('h3','','确认本次导入');title.tabIndex=-1;
-  const warning=[...(Array.isArray(n.warnings)?n.warnings:[]),m?.ambiguous?(m.reason||'匹配不明确，必须由你复核。'):!selection?'没有自动关联，请选择一条记录或新建。':''].filter(Boolean);
-  const oldVals={company:plain(n.company),title:plain(n.title),requisition:plain(n.requisition),status:n.has_explicit_status===false?'':plain(n.status),deadline:fieldDate(n.deadline),interview_at:fieldDate(n.interview_at),next_action:plain(n.next_action)};
+  const warning=[...(Array.isArray(n.warnings)?n.warnings:[]),m?.ambiguous?(m.reason||'匹配不明确，必须由你复核。'):!selection?'没有自动关联，请核对要写入的岗位。':''].filter(Boolean);
+  const oldVals={company:plain(n.company),title:plain(n.title),requisition:plain(n.requisition),status:n.has_explicit_status===false?'':plain(n.status),deadline:fieldDate(n.deadline),interview_at:fieldDate(n.interview_at),interview_reply_by:fieldDate(n.interview_reply_by),next_action:plain(n.next_action)};
   return node('section','details',title,
     paragraph(exact?'建议关联：'+exact.company+' / '+exact.title:'当前没有自动匹配。','meta'),
     shortMeta(({high:'提取置信度：高',medium:'提取置信度：中',low:'提取置信度：低'})[n.confidence],n.received_at?'通知发送时间 '+niceDate(n.received_at):''),
@@ -499,8 +534,9 @@ function renderPreview({token,notice:n,match:m}){
       field('review','title','提取到的岗位',{value:oldVals.title}),
       field('review','requisition','提取到的编号',{value:oldVals.requisition}),
       field('review','status','本次状态',{kind:'select',value:oldVals.status,options:[['','不变更'],...Object.entries(statusLabels)]}),
-      field('review','deadline','本次截止时间（香港）',{value:oldVals.deadline,hint:precisionLabel(n,'deadline')}),
+      field('review','deadline','申请或其他流程截止（香港）',{value:oldVals.deadline,hint:precisionLabel(n,'deadline')}),
       field('review','interview_at','本次面试时间（香港）',{value:oldVals.interview_at,hint:precisionLabel(n,'interview_at')}),
+      field('review','interview_reply_by','本次面试回复期限（香港）',{value:oldVals.interview_reply_by,hint:precisionLabel(n,'interview_reply_by')}),
       field('review','next_action','本次下一步',{value:oldVals.next_action,full:true}),
       n.assessment_completion_confirmation_required?field('review','assessment_completion_confirmed','确认仅完成测评 '+(n.assessment_id||'（未知，不能清除待办）'),{kind:'checkbox',value:'yes',full:true}):null,
       n.assessment_confirmation_required?field('review','same_assessment_confirmed','已核实来源与发送时间，并确认本通知属于同一测评 '+(n.assessment_id||'（编号未知，不能自动改截止）'),{kind:'checkbox',value:'yes',full:true,hint:'仅推算截止；未知编号或原测评不一致时只能复核留历史。'}):null,
@@ -624,8 +660,8 @@ function profileRecordSection([key,title,item,fields,extra],saved,onEdit){
     read:data=>Array.from(rows,prefix=>Object.fromEntries(allFields.map(([name])=>[name,data[prefix+name]||'']))),
   };
 }
-function downloadProfile(){
-  const {resume_zh, resume_en, resume_details, ...shareable}=state.profile||{};
+function downloadProfile(saved){
+  const {resume_zh, resume_en, resume_details, ...shareable}=saved;
   const records={};
   for(const key of ['gender','political_status']){
     if(resume_details?.[key])records[key]=resume_details[key];
@@ -643,6 +679,44 @@ function downloadProfile(){
   const a=node('a');a.href=url;a.download='job-workbench-profile.json';
   document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
   announce('资料 JSON 已导出。请保存在只有你能访问的位置。');
+}
+function profileSuggestion(profileForm,onApply){
+  const labels={email:'邮箱',phone:'手机号码',target_position:'目标岗位'};
+  const entry=field('suggestion','json','粘贴 Agent 的单字段建议',{
+    kind:'textarea',required:true,maxLength:4000,
+    placeholder:'{"field":"email","from":"old@example.com","to":"new@example.com"}',
+    hint:'支持邮箱（email）、手机号码（phone）和目标岗位（target_position）。from 填当前值，空白填 ""。',
+  });
+  const input=qs('textarea',entry), preview=node('div','import-preview');
+  preview.setAttribute('aria-live','polite');
+  input.addEventListener('input',()=>preview.replaceChildren());
+  function clear(){input.value='';preview.replaceChildren();}
+  const review=form(entry,()=>{
+    preview.replaceChildren();
+    let proposal;
+    try{proposal=JSON.parse(input.value);}catch{throw new Error('请粘贴完整的 JSON 建议。');}
+    if(!proposal||typeof proposal!=='object'||Object.keys(proposal).length!==3||
+      typeof proposal.field!=='string'||!Object.hasOwn(labels,proposal.field)||
+      typeof proposal.from!=='string'||typeof proposal.to!=='string'){
+      throw new Error('建议需包含一个支持的 field，以及字符串 from 和 to。');
+    }
+    const {field:key,from,to}=proposal, control=profileForm.elements[key];
+    if(!to.trim()||to!==to.trim()||/[\r\n]/.test(to)||to.length>control.maxLength||to===from){
+      throw new Error('新值须与旧值不同，请核对长度、换行和首尾空格。');
+    }
+    function checkOldValue(){
+      if(control.value!==from)throw new Error('建议中的旧值与当前草稿不同，请按最新内容重新生成建议。');
+    }
+    checkOldValue();
+    preview.replaceChildren(node('h3','',labels[key]),
+      paragraph('当前值：'+(from||'（空白）')),paragraph('建议值：'+to),
+      node('div','actions',btn('采纳到草稿',()=>{
+        checkOldValue();
+        control.value=to;onApply();clear();
+        announce(labels[key]+'已加入草稿。点击「保存资料」后生效。');
+      },'primary'),btn('放弃建议',()=>{clear();input.focus();})));
+  },'预览建议');
+  return details('审阅 Agent 资料建议',review,preview);
 }
 function resumeImportCard(profileForm, sections, groups, onApply){
   const output=node('div','import-preview');
@@ -883,7 +957,9 @@ function profile(){
   const resume=p.resume_details||{};
   const additional=resumeSchema.sections.map(([title,fields])=>[title,[],fields.filter(([key])=>key!=='gender')]);
   const sections=[...profileSections,...profileExtraSections,...additional];
-  const groups=resumeSchema.records.map(definition=>profileRecordSection(definition,resume[definition[0]],()=>navigation.refresh(definition[0])));
+  const groups=resumeSchema.records.map(definition=>profileRecordSection(definition,resume[definition[0]],()=>{
+    navigation.refresh(definition[0]);updateExportLabel();
+  }));
   const section=([title,baseFields,resumeFields])=>node('section','profile-section',node('h3','',title),
     node('div','fields',profileInputs(baseFields,p),profileInputs(resumeFields,resume)));
   const answerObject=p.answers&&typeof p.answers==='object'&&!Array.isArray(p.answers)?p.answers:{};
@@ -899,8 +975,16 @@ function profile(){
     {key:'answers',title:'常见问题',view:node('section','profile-section',node('h3','','常见问题'),answerField)},
   ];
   const navigation=profileNavigator(panels);
-  const profileForm=form(navigation.viewport,f=>{
-    const d=actualData(f);const answers=Object.create(null);
+  let revision=state.profile_revision, saving=false;
+  const conflict=node('div','notice warn',
+    paragraph('另一页已保存资料。本页草稿仍在。打开最新版，对照两页，把需要保留的改动填到新页，再在那里保存。'),
+    link('在新标签页打开最新资料','/#profile','btn'));
+  conflict.hidden=true;conflict.tabIndex=-1;
+  async function saveProfile(exportAfter=false){
+    if(!conflict.hidden){conflict.focus();return;}
+    if(saving)return;
+    if(!profileForm.reportValidity())return;
+    const d=actualData(profileForm);const answers=Object.create(null);
     for(const l of d.answers.split('\n').map(x=>x.trim()).filter(Boolean)){
       const i=l.indexOf('=');if(i<1||!l.slice(i+1).trim())throw new Error('常见问题格式不正确。请使用「问题 = 答案」，一行一项。');
       const k=l.slice(0,i).trim();if(!k)throw new Error('常见问题不能为空。');
@@ -909,13 +993,57 @@ function profile(){
     const base=Object.fromEntries(sections.flatMap(([,fields])=>fields.map(([key])=>[key,d[key]])));
     const resumeDetails=Object.fromEntries(sections.flatMap(([, ,fields])=>fields.map(([key])=>[key,d[key]])));
     for(const group of groups)resumeDetails[group.key]=group.read(d);
-    return mutate('/api/profile',{...base,answers,resume_fields_version:1,resume_details:resumeDetails},'资料已保存到本地。');
-  },'保存资料',navigation.nextMissing);
+    saving=true;
+    try{
+      const saved=await request('/api/profile',{...base,answers,resume_fields_version:1,resume_details:resumeDetails,profile_revision:revision});
+      revision=saved.profile_revision;
+      baseline=JSON.stringify(d);
+      if(state.profile_revision<=revision){
+        state.profile=saved.profile;state.profile_revision=revision;
+      }
+      if(profileHasChanges!==hasChanges)return;
+      if(hasChanges()){
+        updateExportLabel();
+        announce('已保存提交时的资料。刚输入的改动仍在草稿中，请再次保存。');return;
+      }
+      render();
+      if(exportAfter)downloadProfile(saved.profile);
+      else announce('资料已保存到本地。');
+    }catch(error){
+      if(error.status!==409)throw error;
+      conflict.hidden=false;conflict.focus();
+      announce(error.message,true);
+    }finally{saving=false;}
+  }
+  const profileForm=form(navigation.viewport,()=>saveProfile(),'保存资料',navigation.nextMissing);
   profileForm.className='profile-form';
+  let baseline=JSON.stringify(actualData(profileForm));
+  const hasChanges=()=>JSON.stringify(actualData(profileForm))!==baseline;
+  profileHasChanges=hasChanges;
+  const exportButton=btn('导出填表资料 JSON',async ()=>{
+    if(!conflict.hidden){conflict.focus();return;}
+    if(hasChanges()){
+      if(exportButton.textContent==='导出填表资料 JSON'&&!window.confirm('资料有未保存的改动。保存并导出当前资料？'))return;
+      return saveProfile(true);
+    }
+    const latest=await request('/api/state');
+    if(profileHasChanges!==hasChanges)return;
+    if(hasChanges()){updateExportLabel();announce('资料有新改动，请点击「保存并导出填表资料 JSON」。');return;}
+    if(latest.profile_revision!==revision){
+      state.profile=latest.profile;state.profile_revision=latest.profile_revision;
+      render();announce('资料已在另一页更新。已显示最新内容，请核对后再次点击导出。');return;
+    }
+    downloadProfile(latest.profile);
+  });
+  function updateExportLabel(){exportButton.textContent=hasChanges()?'保存并导出填表资料 JSON':'导出填表资料 JSON';}
+  function refreshDraft(){navigation.refresh();updateExportLabel();}
+  profileForm.addEventListener('input',updateExportLabel);
+  profileForm.addEventListener('change',updateExportLabel);
   const header=node('header','resume-page-heading',node('div','',node('h1','','我的简历'),paragraph('在本机整理网申资料，按栏目编辑与保存。','meta')),
-    node('div','actions',link('预览下拉选项','/demo-form.html?preview=select','btn'),btn('导出填表资料 JSON',downloadProfile)));
-  return [header,
-    resumeImportCard(profileForm,sections,groups,()=>navigation.refresh()),
+    node('div','actions',link('预览下拉选项','/demo-form.html?preview=select','btn'),exportButton));
+  return [header,conflict,
+    resumeImportCard(profileForm,sections,groups,refreshDraft),
+    profileSuggestion(profileForm,refreshDraft),
     node('div','profile-editor',navigation.view,node('section','card resume-sheet',profileForm)),
     node('div','grid equal',
       card('分条填表预览',paragraph('导出的资料可在浏览器扩展中逐条预览。证件、家庭和证明人资料留在本机。','meta'),
@@ -942,8 +1070,12 @@ function ocrCard(){
 }
 for(const b of document.querySelectorAll('[data-tab]'))b.addEventListener('click',()=>setTab(b.dataset.tab));
 window.addEventListener('hashchange',()=>{
+  if(tab==='profile'&&location.hash.startsWith('#discovery?capture=')&&!allowProfileExit())return;
   if(captureFromHash()){render();bringCaptureIntoView();return;}
   const next=location.hash.slice(1);if(pages.includes(next)&&next!==tab)setTab(next);
+});
+window.addEventListener('beforeunload',event=>{
+  if(profileHasChanges?.()){event.preventDefault();event.returnValue='';}
 });
 const startupCapture=captureFromHash();
 updateClock();setInterval(updateClock,60_000);setInterval(pollDashboard,25_000);

@@ -2,7 +2,7 @@
 
 维护投递台账、看板和待办，核对招聘通知、测评延期与面试改期，也可以导出日历。
 
-发布页中名称带 `tracking` 的 ZIP 收录下面列出的源码、资料和测试。运行整个工作台请下载同版本的完整包。[查看发布版本](https://github.com/yirenyinjiuzui/Jobwork/releases)
+正式版下载页中名称带 `tracking` 的 ZIP 收录下面列出的源码、资料和测试。运行整个工作台请下载同版本的完整包。[下载 1.0.2](https://github.com/yirenyinjiuzui/Jobwork/releases/tag/v1.0.2)
 
 ## 打包范围
 
@@ -29,3 +29,8 @@
 - [tests/test_mail_chronology.py](../../tests/test_mail_chronology.py)
 - [tests/test_mail_evidence.py](../../tests/test_mail_evidence.py)
 - [tests/test_tracker.py](../../tests/test_tracker.py)
+- [data_snapshot.py](../../data_snapshot.py)
+- [tests/test_ui.mjs](../../tests/test_ui.mjs)
+- [tests/mock_dom.mjs](../../tests/mock_dom.mjs)
+- [tests/test_server.py](../../tests/test_server.py)
+- [tests/test_data_snapshot.py](../../tests/test_data_snapshot.py)

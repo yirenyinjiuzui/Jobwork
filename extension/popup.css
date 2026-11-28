@@ -50,7 +50,11 @@ input[type=file]::file-selector-button{background:#edf3ff;color:#254da9;border:0
 .scan-help[open] { flex-basis: 100%; }
 #previewTarget:empty { display: none; }
 #previewTarget { margin: 10px 0 2px; }
-#reviewStep #message:not(:empty) { margin: 0 0 5px; font-weight: 650; }
+.selection-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.selection-tools:has(#message:not(:empty)) { margin-bottom: 5px; }
+#reviewStep #message:not(:empty) { margin: 0; font-weight: 650; }
+#selectAll { font-size: 12px; padding: 4px 8px; }
+#selectAll:enabled { color: #254bad; background: #edf2ff; }
 .review-scroll { --group-height: 34px; --ordinal-height: 28px; scroll-padding-top: calc(var(--group-height) + var(--ordinal-height)); }
 .review-scroll .review-group { overflow: clip; border: 0; border-radius: 0; box-shadow: none; }
 .review-scroll .review-group-heading {

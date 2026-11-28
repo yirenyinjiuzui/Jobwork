@@ -1,6 +1,6 @@
 ---
 name: job-workbench-review
-description: Review a pasted job description against evidence in the user's résumé or course projects, prepare an entry for the local Job Workbench, or prioritize next actions from its exported application CSV. Use for Hong Kong internship or mainland graduate role screening, not for applying or logging in.
+description: Review Hong Kong internship or mainland graduate roles against résumé evidence, prepare local Job Workbench entries, prioritize its tracker CSV, or draft a requested change to one profile field.
 ---
 
 # 求职岗位复核
@@ -19,3 +19,11 @@ On request, provide an **editable draft** with the keys `company`, `title`, `req
 ## Review a tracker export
 
 Group by company + requisition, only falling back to exact role and location when unambiguous. Do not merge distinct IDs. Prioritize dated actions (confirmation, assessment, or interview), excluding waiting/closed records with no new action. Respect explicit Hong Kong timestamps; show estimates or ambiguous dates as such. Return a concise list with the next action and source, not an update to the tracker.
+
+## Suggest a profile change
+
+When the user asks to change their email (`email`), phone (`phone`), or target role (`target_position`), return one JSON object they can paste into **我的简历 → 审阅 Agent 资料建议**. Use the exact current draft value for `from` and the requested new value for `to`. Ask for a missing value. Use `""` for `from` only when the user confirms the field is empty. The user reviews the suggestion and saves it in the workbench.
+
+```json
+{"field":"email","from":"old@example.com","to":"new@example.com"}
+```

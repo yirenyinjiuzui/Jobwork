@@ -30,6 +30,7 @@ class Element {
   removeAttribute(k){delete this.attrs[k];}
   addEventListener(k,f){this.handlers[k]=f;}
   focus(){}
+  reportValidity(){return true;}
   click(){}
   remove(){}
   scrollIntoView(){}
@@ -112,7 +113,23 @@ async function main(){
   assert(ics.ok);
   assert.match(ics.headers.get('content-type'),/^text\/calendar/);
   assert.match(await ics.text(),/BEGIN:VEVENT/);
+  const searchApps=value=>{
+    const input=byid('app-filter-search');
+    input.value=value;input.handlers.input({target:input});
+    return byid('application-results').textContent;
+  };
+  assert(searchApps('ＪＲ-２２３４   测试公司 自动化').includes('匹配 1 条记录'),'tracking search supports full-width input and reversed cross-field terms');
+  assert(searchApps('自动化 不存在').includes('匹配 0 条记录'),'all terms must match the same application');
+  const statusInput=byid('app-filter-status');
+  statusInput.value='submitted';statusInput.handlers.change({target:statusInput});
+  assert(searchApps('自动化 JR-2234').includes('匹配 0 条记录'),'status filter still applies');
+  statusInput.value='interview';statusInput.handlers.change({target:statusInput});
+  assert(searchApps('JR-2234 测试公司').includes('匹配 1 条记录'));
   await click('看板');
+  assert(byid('application-results').textContent.includes('匹配 1 条记录'));
+  assert(searchApps('JR-2234 missing').includes('匹配 0 条记录'),'board uses the same search');
+  statusInput.value='';statusInput.handlers.change({target:statusInput});
+  assert(searchApps('    ').includes('自动化实习'),'whitespace clears query');
   const board=nodes(root).find(n=>n.attrs?.['aria-label']==='按状态组织的投递看板');
   assert(board?.textContent?.includes('自动化实习'));
   assert(board?.textContent?.includes('英文简历 v4'));
@@ -215,6 +232,33 @@ async function main(){
     awards:[{name:'示例奖项'}],languages:[{language:'英语'}],
   });
   assert(!('resume_en' in exportedProfile));
+  byid('profile-email').value='draft@example.invalid';
+  nodes(root).find(e=>e.className==='profile-form').handlers.input();
+  run('window.confirm=()=>false');
+  run("setTab('tracking')");
+  assert.equal(run('tab'),'profile');
+  assert.equal(byid('profile-email').value,'draft@example.invalid');
+  await click('保存并导出填表资料 JSON');
+  assert.equal(JSON.parse(await downloads.at(-1).text()).profile.email,'draft@example.invalid');
+  assert.equal((await run("request('/api/state')")).profile.email,'draft@example.invalid');
+  const downloadCount=downloads.length;
+  await run("request('/api/profile',{...state.profile,resume_fields_version:1,profile_revision:state.profile_revision,email:'other-tab@example.invalid'})");
+  await click('导出填表资料 JSON');
+  assert.equal(downloads.length,downloadCount);
+  assert.equal(byid('profile-email').value,'other-tab@example.invalid');
+  assert(byid('status').textContent.includes('核对'));
+  await click('导出填表资料 JSON');
+  assert.equal(JSON.parse(await downloads.at(-1).text()).profile.email,'other-tab@example.invalid');
+  run("const profileFetch=fetch;let finishRead;fetch=async (...args)=>{const response=await profileFetch(...args);await new Promise(resolve=>finishRead=resolve);return response;}");
+  const pendingExport=click('导出填表资料 JSON');
+  for(let i=0;i<100&&!run('finishRead');i++)await new Promise(r=>setTimeout(r,10));
+  byid('profile-email').value='during-read@example.invalid';
+  run('fetch=profileFetch;finishRead()');
+  await pendingExport;
+  assert.equal(downloads.length,downloadCount+1);
+  assert.equal(byid('profile-email').value,'during-read@example.invalid');
+  assert.equal((await run("request('/api/state')")).profile.email,'other-tab@example.invalid');
+  run('window.confirm=()=>true');
   // The profile editor keeps one draft across sections. Import has separate review and save actions.
   await click('教育经历');
   assert.equal(run('profileSectionKey'),'education');
@@ -235,6 +279,45 @@ async function main(){
   assert.equal((await run("request('/api/state')")).profile.resume_details.education.length,2);
   await submit('profile-preferred_name');
   assert.equal((await run("request('/api/state')")).profile.resume_details.education.length,3);
+  const readProfile=()=>run("request('/api/state').then(({profile,profile_revision})=>({profile,profile_revision}))");
+  const before=await readProfile();
+  const suggestion={field:'email',from:before.profile.email,to:'suggested@example.invalid'};
+  const previewSuggestion=async value=>{
+    byid('suggestion-json').value=JSON.stringify(value);
+    await submit('suggestion-json');
+  };
+  await previewSuggestion(suggestion);
+  assert(text().includes(suggestion.from)&&text().includes(suggestion.to));
+  await click('放弃建议');
+  assert.equal(byid('profile-email').value,suggestion.from);
+  assert.deepEqual(await readProfile(),before);
+  for(const invalid of [{...suggestion,field:'id_card'},{...suggestion,phone:'123'}]){
+    await previewSuggestion(invalid);
+    assert(byid('errors').textContent);
+    assert(!nodes(root).some(e=>e.tagName==='button'&&e.textContent==='采纳到草稿'));
+  }
+  await previewSuggestion(suggestion);
+  byid('profile-email').value='hand-edited@example.invalid';
+  await click('采纳到草稿');
+  assert.equal(byid('profile-email').value,'hand-edited@example.invalid');
+  assert(byid('errors').textContent.includes('旧值'));
+  byid('profile-email').value=suggestion.from;
+  await previewSuggestion(suggestion);
+  await click('采纳到草稿');
+  assert.equal(byid('profile-email').value,suggestion.to);
+  assert.deepEqual(await readProfile(),before);
+  await submit('profile-email');
+  const saved=await readProfile();
+  assert.deepEqual(saved.profile,{...before.profile,email:suggestion.to});
+  assert.equal(saved.profile_revision,before.profile_revision+1);
+  await previewSuggestion({field:'email',from:suggestion.to,to:'stale@example.invalid'});
+  await click('采纳到草稿');
+  await run("request('/api/profile',{...state.profile,resume_fields_version:1,profile_revision:state.profile_revision,email:'newer@example.invalid'})");
+  const newer=await readProfile();
+  await submit('profile-email');
+  assert(byid('errors').textContent.includes('最新资料'));
+  assert.equal(byid('profile-email').value,'stale@example.invalid');
+  assert.deepEqual(await readProfile(),newer);
   assert.equal(run('link("bad", "javascript:alert(1)")'),null);
   // Synthetic MIME import through the actual file-selection/preview/confirm UI.
   const mailA=await run("request('/api/application',{submitted_at:'2026-11-01T10:00+08:00',company:'Fictional UI Harbor',title:'Data Intern',requisition:'UI-A1001',status:'submitted'})");
@@ -307,6 +390,26 @@ async function main(){
   assert(reviewSection.textContent.includes('JobPosting.description'));
   run("jobRoute='';render()");
   for(const [name] of locationCases)assert(byid('job-results').textContent.includes(name));
+  // Search terms may appear in different fields, in any order, with flexible whitespace.
+  const searchJobs=(value)=>{
+    const input=byid('job-filter-search');
+    input.value=value;input.handlers.input({target:input});
+    return byid('job-results').textContent;
+  };
+  assert(searchJobs('Hong Kong   True HK').includes('True HK'),'location and title terms must match regardless of order');
+  assert(!byid('job-results').textContent.includes('Overseas headquarters'));
+  assert(searchJobs('  ＦＩＸＴＵＲＥ-location   TRUE  HK  ').includes('True HK'),'width, case and whitespace normalization');
+  assert(searchJobs('True HK nonexistent-token').includes('匹配 0 个岗位'),'every search term must match the same job');
+  searchJobs('Hong Kong True HK');
+  const route=byid('job-filter-route');
+  route.value='hk';route.handlers.change({target:route});
+  assert(!byid('job-results').textContent.includes('Overseas internship'),'unmatched title should not appear in location review');
+  searchJobs('Hong Kong Fixture-location');
+  assert(byid('job-results').textContent.includes('正文支持香港实地实习 2 个岗位'));
+  assert(byid('job-results').textContent.includes('地点待复核（不计入香港实地实习）：3 个'));
+  route.value='';route.handlers.change({target:route});
+  searchJobs('   ');
+  for(const [name] of locationCases)assert(byid('job-results').textContent.includes(name));
   console.log('Location capture/UI/HTTP passed: 5 synthetic pages, confirmed save only, raw HK preserved, 2 supported HK and 3 visible review rows, all remain in all-regions view.');
   const identityInputs=[
     {url:'https://example.invalid/identity/A',requisition:'I-1'},
@@ -323,6 +426,9 @@ async function main(){
   }
   run("jobSearch='Fictional UI Identity';jobRoute='';render()");
   assert(byid('job-results').textContent.includes('相似岗位或编号重复，已分别保留'));
+  assert(searchJobs('I-2 Fictional UI Identity').includes('编号 I-2'));
+  assert(!byid('job-results').textContent.includes('编号 I-1'));
+  searchJobs('Fictional UI Identity');
   const saveButtons=nodes(byid('job-results')).filter(n=>n.tagName==='button'&&n.textContent==='存到投递台账');
   assert.equal(saveButtons.length,5);
   for(const button of saveButtons)await button.handlers.click();

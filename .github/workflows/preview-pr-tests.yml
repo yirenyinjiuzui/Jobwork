@@ -1,0 +1,29 @@
+name: Preview PR tests
+run-name: "Preview PR #${{ github.event.pull_request.number }} (${{ github.event.action }})"
+
+on:
+  pull_request:
+    branches: [preview/workflows-1.0.2]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python -m unittest discover -s tests
+
+  node:
+    name: Node tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: node --test tests/test_*.mjs

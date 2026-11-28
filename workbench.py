@@ -22,13 +22,24 @@ RESUME_TEXT += [['skills', '', 'textarea'], ['self_evaluation', '', 'textarea'],
 RESUME_RECORDS = {key: primary + extra for key, _, _, primary, extra in RESUME_SCHEMA['records']}
 NEW_RESUME_GROUPS = ('family_relations', 'patents', 'publications')
 APP_FIELDS = ('company','title','requisition','location','career_type','status','deadline',
-              'interview_at','next_action','source_url','resume_label','submitted_at','last_notice_at','last_notice_fingerprint')
+              'interview_at','interview_reply_by','next_action','source_url','resume_label','submitted_at','last_notice_at','last_notice_fingerprint')
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 def normalized(v):
     return ' '.join(unicodedata.normalize('NFKC',str(v or '')).casefold().split())
+
+def _matches_legacy_job(job, app):
+    from discovery import _canonical_manual_url
+    if (not job['url'] or not app['source_url'] or
+        normalized(app['company'])!=normalized(job['company']) or
+        normalized(app['requisition'])!=normalized(job['requisition']) or
+        _canonical_manual_url(app['source_url'])!=_canonical_manual_url(job['url'])):
+        return False
+    if job['requisition']:
+        return True
+    return normalized(app['title'])==normalized(job['title']) and normalized(app['location'])==normalized(job['location'])
 
 def date_value(v):
     s = str(v or '').strip()
@@ -89,7 +100,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS applications (
  id INTEGER PRIMARY KEY, company TEXT NOT NULL, title TEXT NOT NULL, requisition TEXT NOT NULL,
  identity TEXT UNIQUE NOT NULL, location TEXT NOT NULL, career_type TEXT NOT NULL, status TEXT NOT NULL,
- deadline TEXT NOT NULL, interview_at TEXT NOT NULL, next_action TEXT NOT NULL, source_url TEXT NOT NULL, resume_label TEXT NOT NULL DEFAULT '', submitted_at TEXT NOT NULL DEFAULT '',
+ deadline TEXT NOT NULL, interview_at TEXT NOT NULL, interview_reply_by TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL, source_url TEXT NOT NULL, resume_label TEXT NOT NULL DEFAULT '', submitted_at TEXT NOT NULL DEFAULT '',
  last_notice_at TEXT NOT NULL, last_notice_fingerprint TEXT NOT NULL, date_precision TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS history (
  id INTEGER PRIMARY KEY, application_id INTEGER NOT NULL REFERENCES applications(id),
@@ -110,6 +121,10 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
+class ProfileConflict(ValueError):
+    pass
+
+
 class Store:
     def __init__(self, filename):
         self.file = str(Path(filename).resolve())
@@ -117,11 +132,54 @@ class Store:
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
             db.executescript(SCHEMA)
+            db.execute('BEGIN IMMEDIATE')
             if not any(row[1]=='resume_label' for row in db.execute('PRAGMA table_info(applications)')):
                 db.execute("ALTER TABLE applications ADD COLUMN resume_label TEXT NOT NULL DEFAULT ''")
             if not any(row[1]=='submitted_at' for row in db.execute('PRAGMA table_info(applications)')):
                 db.execute("ALTER TABLE applications ADD COLUMN submitted_at TEXT NOT NULL DEFAULT ''")
+            if not any(row[1]=='interview_reply_by' for row in db.execute('PRAGMA table_info(applications)')):
+                db.execute("ALTER TABLE applications ADD COLUMN interview_reply_by TEXT NOT NULL DEFAULT ''")
+                self._recover_interview_replies(db)
             db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES ('calendar_id',?)",(secrets.token_hex(16),))
+            self._migrate_job_links(db)
+
+    @staticmethod
+    def _recover_interview_replies(db):
+        from tracker import _date_candidates, _mail_scope, _utc
+        rows=db.execute("""SELECT a.id,a.deadline,a.date_precision,h.notes,h.received_at
+            FROM applications a JOIN history h ON h.application_id=a.id AND h.fingerprint=a.last_notice_fingerprint
+            WHERE a.status='interview' AND a.deadline!='' AND h.status='interview' AND h.applied=1""").fetchall()
+        for row in rows:
+            summary,*evidence=row['notes'].split('；证据 ')
+            if '截止 '+row['deadline'] not in summary.split('；'):
+                continue
+            # Old history contains bounded quotations. Restore only a reply date
+            # corroborated by the recorded deadline and the original wording.
+            replies={}
+            for item in evidence:
+                label,_,quote=item.partition('：')
+                if not label.endswith((' / text',' / status')):
+                    continue
+                dates,precision,_=_date_candidates(_mail_scope(quote),'interview',_utc(row['received_at']))
+                if dates['interview_reply_by']:
+                    replies[dates['interview_reply_by']]=precision['interview_reply_by']
+            if set(replies)=={row['deadline']}:
+                precision=json.loads(row['date_precision'])
+                precision['interview_reply_by']=replies[row['deadline']]
+                db.execute('UPDATE applications SET interview_reply_by=?,date_precision=? WHERE id=?',
+                           (row['deadline'],json.dumps(precision,ensure_ascii=False),row['id']))
+
+    @staticmethod
+    def _migrate_job_links(db):
+        # Row numbers in old links may already refer to a different board's job.
+        links=db.execute("SELECT key,value FROM settings WHERE key GLOB 'job_application:[0-9]*'").fetchall()
+        for key, app_id in links:
+            job=db.execute('SELECT * FROM jobs WHERE id=?',(key.split(':')[1],)).fetchone()
+            app=db.execute('SELECT * FROM applications WHERE id=?',(app_id,)).fetchone()
+            new_key='legacy:'+key
+            if job and app and _matches_legacy_job(job,app):
+                new_key='job_application:'+job['source_id']
+            db.execute('UPDATE settings SET key=? WHERE key=?',(new_key,key))
 
     @contextmanager
     def connect(self, write=False):
@@ -177,17 +235,21 @@ class Store:
         vals['career_type']=vals['career_type'] or 'other'
         if vals['status'] not in STATUS or vals['career_type'] not in TYPES:
             raise ValueError('无效的投递状态或岗位类型')
-        for f in ('deadline','interview_at','submitted_at','last_notice_at'):
+        for f in ('deadline','interview_at','interview_reply_by','submitted_at','last_notice_at'):
             vals[f]=((at(vals[f]).isoformat(timespec='seconds') if at(vals[f]) else '') if f=='last_notice_at' else date_value(vals[f]))
         precision=data.get('date_precision',old.get('date_precision',{}))
         if data.get('_manual'):
             precision=dict(precision)
-            for f in ('deadline','interview_at'):
+            for f in ('deadline','interview_at','interview_reply_by'):
                 if f in data and vals[f]!=old.get(f,''):
                     if vals[f]:
                         precision[f]='date' if len(vals[f])==10 else 'exact'
                     else:
                         precision.pop(f,None)
+        if old.get('status')=='interview' and vals['status']!='interview':
+            vals['interview_reply_by']=''
+            precision=dict(precision)
+            precision.pop('interview_reply_by',None)
         vals['date_precision']=json.dumps(precision,ensure_ascii=False)
         vals['source_url']=safe_url(vals['source_url'])
         discriminator=('req:'+normalized(vals['requisition'])) if vals['requisition'] else ('title:'+normalized(vals['title'])+'|'+normalized(vals['location']))
@@ -276,18 +338,19 @@ class Store:
                     if normalized(row['company'])!=normalized(job['company']):
                         continue
                     if manual_job(row)['source_id']==job['source_id']:
-                        matches.append(row['id'])
+                        matches.append(row)
                 if len(matches)==1:
-                    db.execute('UPDATE jobs SET source_id=? WHERE id=?',(job['source_id'],matches[0]))
+                    old=matches[0]
+                    db.execute('UPDATE jobs SET source_id=? WHERE id=?',(job['source_id'],old['id']))
+                    db.execute('UPDATE settings SET key=? WHERE key=?',('job_application:'+job['source_id'],'job_application:'+old['source_id']))
                 elif len(matches)>1:
                     raise ValueError('找到多条旧版收藏，请在列表检查原记录；未创建重复岗位')
             return self.put_job(db,job)
 
     def save_job_as_application(self,id):
-        from discovery import _canonical_manual_url
         with self.connect(True) as db:
             job=self.record(db,'jobs',id)
-            key='job_application:'+str(job['id'])
+            key='job_application:'+job['source_id']
             linked=db.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
             if linked:
                 return self.record(db,'applications',linked[0])
@@ -296,11 +359,7 @@ class Store:
             matches=[]
             if job['url']:
                 for row in self.rows(db,'SELECT * FROM applications'):
-                    if (not row['identity'].startswith('job:') and row['source_url'] and
-                        normalized(row['company'])==normalized(job['company']) and
-                        normalized(row['requisition'])==normalized(job['requisition']) and
-                        (job['requisition'] or (normalized(row['title'])==normalized(job['title']) and normalized(row['location'])==normalized(job['location']))) and
-                        _canonical_manual_url(row['source_url'])==_canonical_manual_url(job['url']) and
+                    if (not row['identity'].startswith('job:') and _matches_legacy_job(job,row) and
                         not db.execute("SELECT 1 FROM settings WHERE key LIKE 'job_application:%' AND value=?",(str(row['id']),)).fetchone()):
                         matches.append(row)
             if len(matches)>1:
@@ -309,7 +368,7 @@ class Store:
                 app=matches[0]
             else:
                 d={k:job[k] for k in ('company','title','requisition','location','career_type','deadline')}
-                d.update(source_url=job['url'],status='saved',_job_identity='job:'+str(job['id']))
+                d.update(source_url=job['url'],status='saved',_job_identity='job:'+job['source_id'])
                 app=self._save_application(db,d)
             db.execute('INSERT INTO settings(key,value) VALUES (?,?)',(key,str(app['id'])))
             return app
@@ -406,6 +465,12 @@ class Store:
             db.execute('INSERT INTO settings(key,value) VALUES (?,?)',('source_evidence:'+secrets.token_hex(16),json.dumps(proof,ensure_ascii=False)))
             return {'job':self.record(db,'jobs',job['id']),'evidence':proof}
 
+    @staticmethod
+    def profile_snapshot(db):
+        values=dict(db.execute("SELECT key,value FROM settings WHERE key IN ('profile','profile_revision')"))
+        return {'profile':json.loads(values.get('profile','{}')),
+                'profile_revision':int(values.get('profile_revision',0))}
+
     def set_profile(self,data):
         profile={k:short(data.get(k),5000 if k=='project_summary' else 500) for k in PROFILE if k!='answers'}
         answers=data.get('answers') or {}
@@ -413,8 +478,11 @@ class Store:
             raise ValueError('常见问题答案必须是对象')
         profile['answers']={short(k,180):short(v,3500) for k,v in list(answers.items())[:40] if short(k,180)}
         with self.connect(True) as db:
-            saved = db.execute("SELECT value FROM settings WHERE key='profile'").fetchone()
-            previous = json.loads(saved[0]) if saved else {}
+            snapshot=self.profile_snapshot(db)
+            revision=snapshot['profile_revision']
+            if type(data.get('profile_revision')) is not int or data['profile_revision']!=revision:
+                raise ProfileConflict('当前页未读取最新资料。请保留本页草稿，另开资料页核对后保存。')
+            previous=snapshot['profile']
             if 'resume_details' in data:
                 if data.get('resume_fields_version') != 1 and has_expanded_resume(previous.get('resume_details', {})):
                     raise ValueError('资料页已更新，请刷新页面后再保存。')
@@ -422,7 +490,8 @@ class Store:
             elif 'resume_details' in previous:
                 profile['resume_details'] = previous['resume_details']
             db.execute("INSERT INTO settings(key,value) VALUES ('profile',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(json.dumps(profile,ensure_ascii=False),))
-        return profile
+            db.execute("INSERT INTO settings(key,value) VALUES ('profile_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(revision+1),))
+        return {'profile':profile,'profile_revision':revision+1}
 
     def mark_read(self,id=None):
         with self.connect(True) as db:
@@ -468,7 +537,7 @@ class Store:
             task_key=tasks_api.key(notice.get('assessment_id'))
             task=tasks.get(task_key)
             receipt=notice.get('assessment_completion')
-            task_event=bool(notice.get('is_eml') and task_key and (receipt or notice.get('status')=='assessment'))
+            task_event=bool(task_key and (receipt or notice.get('status')=='assessment'))
             relative=notice.get('assessment_relative')
             assessment_ok=bool(notice.get('assessment_id') and notice.get('received_at') and notice.get('sent_precision')=='exact' and
                 (task or not tasks and not prior_assessment and (not old or old['status'] in ('saved','submitted','waiting'))))
@@ -476,7 +545,9 @@ class Store:
                 raise ValueError('请明确确认邮件来源、发送时间及同一测评编号后，再更新相对截止估计。')
             base=dict(notice)
             if receipt:
-                if not task or not _utc(task.get('notice_at')) or not notice.get('received_at') or notice.get('sent_precision')!='exact' or notice.get('requires_review') or not old or match_application(notice,self.rows(db,'SELECT * FROM applications')).get('match_id')!=old['id']:
+                if not old:
+                    raise ValueError('请为测评完成回执选择已有投递记录。')
+                if not task or not _utc(task.get('notice_at')) or not notice.get('received_at') or notice.get('sent_precision')!='exact' or notice.get('requires_review') or match_application(notice,self.rows(db,'SELECT * FROM applications')).get('match_id')!=old['id']:
                     if overrides.get('review_confirmed') is not True:
                         raise ValueError('完成回执无法唯一确认原测评，请复核；不会清除其他待办。')
                     base['review_only']=True
@@ -536,19 +607,23 @@ class Store:
                 tasks[task_key]=task
                 if not old or old['status'] in ('saved','submitted','waiting','assessment'):
                     pending=[t for t in tasks.values() if not t['completed']]
-                    dated=sorted((t for t in pending if _utc(t['deadline'])),key=lambda t:_utc(t['deadline']))
+                    # Compare deadlines using the same end-of-day convention as the
+                    # dashboard; date-only notices must not hide an exact cutoff
+                    # on that date. Preserve the original raw value and precision.
+                    dated=sorted((t for t in pending if at(t['deadline'])),
+                                 key=lambda t:(at(t['deadline']),len(t['deadline'])==10))
                     merged['status']='assessment' if pending else 'waiting'
                     merged['deadline']=dated[0]['deadline'] if dated else ''
                     merged.setdefault('date_precision',{}).pop('deadline',None)
                     if dated:merged['date_precision']['deadline']=dated[0]['precision']
                     merged['next_action']='待完成测评：'+', '.join(t['id'] for t in pending) if pending else '测评已完成，等待招聘方结果'
                 if receipt and old and old['status'] in ('interview','offer','closed'):
-                    for field in ('status','deadline','interview_at','next_action','date_precision'):
+                    for field in ('status','deadline','interview_at','interview_reply_by','next_action','date_precision'):
                         merged[field]=old[field]
                 if old and _utc(old.get('last_notice_at')) and (not _utc(merged.get('last_notice_at')) or _utc(merged['last_notice_at'])<_utc(old['last_notice_at'])):
                     merged['last_notice_at']=old['last_notice_at']
             if applied:
-                for f in ('deadline','interview_at'):
+                for f in ('deadline','interview_at','interview_reply_by'):
                     if f in safe and safe[f]!=notice.get(f):
                         if safe[f]:
                             merged.setdefault('date_precision',{})[f]='date' if len(str(safe[f]))==10 else 'exact'
@@ -565,7 +640,7 @@ class Store:
             warnings=list(dict.fromkeys((notice.get('warnings') or [])+(merged.get('warnings') or [])))
             history_status=base.get('status') if base.get('has_explicit_status') and not base.get('review_only') else ''
             label='识别状态：'+str(history_status or '待核实')
-            times='；'.join(f'{name} {base[k]}' for k,name in (('deadline','截止'),('interview_at','面试')) if base.get(k))
+            times='；'.join(f'{name} {base[k]}' for k,name in (('deadline','截止'),('interview_at','面试'),('interview_reply_by','面试回复期限')) if base.get(k))
             evidence=['证据 '+e['source']+' / '+e['field']+'：'+e['quote'] for e in notice.get('evidence',[])][:12]
             msg=('；'.join(x for x in (label,times,*warnings,*evidence) if x))[:6000]
             db.execute('INSERT INTO history(application_id,fingerprint,created_at,received_at,status,source_url,notes,applied) VALUES (?,?,?,?,?,?,?,?)',
@@ -579,7 +654,7 @@ class Store:
             for app in apps:
                 tracked=list(assessment_tasks.load(db,app).values())
                 if tracked:app['assessment_tasks']=tracked
-            saved=db.execute("SELECT value FROM settings WHERE key='profile'").fetchone()
+            profile=self.profile_snapshot(db)
             jobs=self.rows(db,'SELECT * FROM jobs ORDER BY active DESC,id DESC')
             source_map={r['id']:r for r in self.rows(db,'SELECT * FROM sources')}
             reviews={int(r['key'].split(':')[1]):json.loads(r['value']) for r in db.execute("SELECT key,value FROM settings WHERE key LIKE 'source_review:%'")}
@@ -602,7 +677,7 @@ class Store:
                     ((normalized(other['title'])==normalized(job['title']) and normalized(other['location'])==normalized(job['location'])) or
                      (job['requisition'] and normalized(other['requisition'])==normalized(job['requisition'])))]
                 job['identity_review']=('相似岗位或编号重复，已分别保留；请核对来源和职责后分别记录。相关条目：'+', '.join(map(str,similar[:8]))) if similar else ''
-            return dict(applications=apps,today=prioritize(apps),profile=json.loads(saved[0]) if saved else {},
+            return dict(applications=apps,today=prioritize(apps),**profile,
                 companies=self.rows(db,'SELECT * FROM companies ORDER BY name'),
                 sources=self.rows(db,'SELECT * FROM sources ORDER BY id'),
                 jobs=jobs,
@@ -615,17 +690,18 @@ def prioritize(apps, clock=None):
         status=row['status']
         if status not in ('assessment','interview','offer','saved'):
             continue
-        due_field='deadline'
-        due=at(row.get('deadline'))
+        due_field='interview_reply_by' if status=='interview' else 'deadline'
+        due=at(row.get(due_field))
         if status=='interview':
             slot=at(row.get('interview_at'))
-            if slot and (not due or slot<=due):
+            # Prefer a future action over an expired one, then the earlier date.
+            if slot and (not due or (slot<now_hk,slot)<=(due<now_hk,due)):
                 due, due_field=slot, 'interview_at'
         if status=='saved' and not due:
             continue
         if due and due<now_hk and status=='saved':
             continue
-        label={'saved':'申请截止','assessment':'待完成网测','interview':'待确认面试' if due_field=='deadline' and due else '待参加面试','offer':'待处理 Offer'}[status]
+        label={'saved':'申请截止','assessment':'待完成网测','interview':'面试回复截止' if due_field=='interview_reply_by' and due else '待参加面试','offer':'待处理 Offer'}[status]
         days=((due.astimezone(HK).date()-now_hk.astimezone(HK).date()).days if due else None)
         precision=(row.get('date_precision') or {}).get(due_field)
         suffix=('日期待确认' if days is None else '时间已过，请确认结果' if due<now_hk else
