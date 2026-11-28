@@ -668,6 +668,44 @@ function downloadProfile(saved){
   document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
   announce('资料 JSON 已导出。请保存在只有你能访问的位置。');
 }
+function profileSuggestion(profileForm,onApply){
+  const labels={email:'邮箱',phone:'手机号码',target_position:'目标岗位'};
+  const entry=field('suggestion','json','粘贴 Agent 的单字段建议',{
+    kind:'textarea',required:true,maxLength:4000,
+    placeholder:'{"field":"email","from":"old@example.com","to":"new@example.com"}',
+    hint:'支持邮箱（email）、手机号码（phone）和目标岗位（target_position）。from 填当前值，空白填 ""。',
+  });
+  const input=qs('textarea',entry), preview=node('div','import-preview');
+  preview.setAttribute('aria-live','polite');
+  input.addEventListener('input',()=>preview.replaceChildren());
+  function clear(){input.value='';preview.replaceChildren();}
+  const review=form(entry,()=>{
+    preview.replaceChildren();
+    let proposal;
+    try{proposal=JSON.parse(input.value);}catch{throw new Error('请粘贴完整的 JSON 建议。');}
+    if(!proposal||typeof proposal!=='object'||Object.keys(proposal).length!==3||
+      typeof proposal.field!=='string'||!Object.hasOwn(labels,proposal.field)||
+      typeof proposal.from!=='string'||typeof proposal.to!=='string'){
+      throw new Error('建议需包含一个支持的 field，以及字符串 from 和 to。');
+    }
+    const {field:key,from,to}=proposal, control=profileForm.elements[key];
+    if(!to.trim()||to!==to.trim()||/[\r\n]/.test(to)||to.length>control.maxLength||to===from){
+      throw new Error('新值须与旧值不同，请核对长度、换行和首尾空格。');
+    }
+    function checkOldValue(){
+      if(control.value!==from)throw new Error('建议中的旧值与当前草稿不同，请按最新内容重新生成建议。');
+    }
+    checkOldValue();
+    preview.replaceChildren(node('h3','',labels[key]),
+      paragraph('当前值：'+(from||'（空白）')),paragraph('建议值：'+to),
+      node('div','actions',btn('采纳到草稿',()=>{
+        checkOldValue();
+        control.value=to;onApply();clear();
+        announce(labels[key]+'已加入草稿。点击「保存资料」后生效。');
+      },'primary'),btn('放弃建议',()=>{clear();input.focus();})));
+  },'预览建议');
+  return details('审阅 Agent 资料建议',review,preview);
+}
 function resumeImportCard(profileForm, sections, groups, onApply){
   const output=node('div','import-preview');
   output.setAttribute('aria-live','polite');
@@ -986,12 +1024,14 @@ function profile(){
     downloadProfile(latest.profile);
   });
   function updateExportLabel(){exportButton.textContent=hasChanges()?'保存并导出填表资料 JSON':'导出填表资料 JSON';}
+  function refreshDraft(){navigation.refresh();updateExportLabel();}
   profileForm.addEventListener('input',updateExportLabel);
   profileForm.addEventListener('change',updateExportLabel);
   const header=node('header','resume-page-heading',node('div','',node('h1','','我的简历'),paragraph('在本机整理网申资料，按栏目编辑与保存。','meta')),
     node('div','actions',link('预览下拉选项','/demo-form.html?preview=select','btn'),exportButton));
   return [header,conflict,
-    resumeImportCard(profileForm,sections,groups,()=>{navigation.refresh();updateExportLabel();}),
+    resumeImportCard(profileForm,sections,groups,refreshDraft),
+    profileSuggestion(profileForm,refreshDraft),
     node('div','profile-editor',navigation.view,node('section','card resume-sheet',profileForm)),
     node('div','grid equal',
       card('分条填表预览',paragraph('导出的资料可在浏览器扩展中逐条预览。证件、家庭和证明人资料留在本机。','meta'),
