@@ -372,6 +372,27 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaises(d.DiscoveryError):
                 d.manual_job({"company": "A", "title": "B", "url": "https://a.example", "deadline": deadline})
 
+    def test_explicit_mainland_after_hong_kong_comma(self):
+        locations = (
+            "Hong Kong, Shenzhen",
+            "Hong Kong, Beijing",
+            "Hong Kong, Mainland China",
+            "Hong Kong, China / Shenzhen",
+            "Hong Kong，Shenzhen",
+        )
+        for location in locations:
+            with self.subTest(location=location):
+                job, = d.fetch_jobs(GH, transport=lambda *_: {
+                    "jobs": [gh_row(location={"name": location})]})
+                self.assertEqual(job["region"], "both")
+                manual = d.manual_job({
+                    "company": "Fictional", "title": "AI Intern",
+                    "url": "https://fictional.example/jobs/1", "location": location})
+                self.assertEqual(manual["region"], "both")
+        for location in ("Hong Kong, China", "Hong Kong, PRC", "香港，中国"):
+            with self.subTest(location=location):
+                self.assertEqual(d.classify_region(location), "hong_kong")
+
     def test_keywords_only_do_not_force_intern(self):
         self.assertEqual(d.classify_career("International Customer Support"), "other")
         self.assertEqual(d.classify_career("Customer Support", "Full-time"), "other")
