@@ -3,6 +3,7 @@ import tempfile,unittest
 from unittest.mock import patch
 from workbench import Store
 from discovery import fetch_jobs
+from tracker import parse_notice
 
 class IdentityTests(unittest.TestCase):
  def setUp(self):
@@ -53,5 +54,72 @@ class IdentityTests(unittest.TestCase):
   with self.s.connect() as db:
    self.assertEqual(tuple(before[0]),tuple(db.execute('SELECT * FROM applications WHERE id=?',(old['id'],)).fetchone()))
    self.assertEqual([tuple(r) for r in schema],[tuple(r) for r in db.execute('SELECT name,sql FROM sqlite_master ORDER BY name')])
+
+ def add_board_job(self,board):
+  source=self.s.save_source(dict(provider='greenhouse',board=board,company=self.base['company']))
+  row=dict(id=77,title='Data Intern',requisition_id='R-1',location={'name':'Hong Kong'})
+  with patch('discovery._read_json',return_value={'jobs':[row]}):
+   self.s.check_sources(source['id'])
+  return next(job for job in self.s.state()['jobs'] if job['board_id']==source['id'])
+
+ def test_removed_source_row_reuse_preserves_both_applications(self):
+  a=self.add_board_job('fixture-a')
+  saved=self.s.save_job_as_application(a['id'])
+  notice=parse_notice('Thank you for applying.',company=a['company'],title=a['title'],requisition=a['requisition'])
+  self.s.import_notice(notice,id=saved['id'],overrides={'review_confirmed':True})
+  submitted=self.s.save_application({'id':saved['id'],'status':'submitted','resume_label':'A version'})
+  history=self.s.history(saved['id'])
+  self.assertEqual(len(history),1)
+  self.s.delete_source(a['board_id'])
+  b=self.add_board_job('fixture-b')
+  self.assertEqual(b['id'],a['id'])
+  new=self.s.save_job_as_application(b['id'])
+  self.assertNotEqual(new['id'],saved['id'])
+  self.assertEqual((new['source_url'],new['status']),(b['url'],'saved'))
+  self.assertEqual(self.s.save_job_as_application(b['id']),new)
+  # Re-adding the same board gives A a different row number.
+  again=self.add_board_job('fixture-a')
+  self.assertNotEqual(again['id'],a['id'])
+  self.assertEqual(self.s.save_job_as_application(again['id']),submitted)
+  self.assertCountEqual(self.s.applications(),[submitted,new])
+  self.assertEqual(self.s.history(saved['id']),history)
+  self.assertEqual(self.s.history(new['id']),[])
+
+ def old_numeric_link(self):
+  a=self.add_board_job('legacy-a')
+  old=self.s.save_application(dict(company=a['company'],title='Edited title',requisition=a['requisition'],
+                                   source_url=a['url']+'?utm_source=old',status='interview'))
+  with self.s.connect(True) as db:
+   db.execute('UPDATE applications SET identity=? WHERE id=?',('job:'+str(a['id']),old['id']))
+   db.execute('INSERT INTO settings VALUES (?,?)',('job_application:'+str(a['id']),str(old['id'])))
+  return a,self.s.applications()[0]
+
+ def test_upgrade_keeps_valid_numeric_link(self):
+  a,old=self.old_numeric_link()
+  self.s=Store(self.s.file)
+  self.assertEqual(self.s.save_job_as_application(a['id']),old)
+  self.assertEqual(self.s.applications(),[old])
+
+ def test_upgrade_skips_numeric_link_already_reused_by_another_board(self):
+  a,old=self.old_numeric_link()
+  self.s.delete_source(a['board_id'])
+  b=self.add_board_job('legacy-b')
+  self.assertEqual(b['id'],a['id'])
+  self.s=Store(self.s.file)
+  new=self.s.save_job_as_application(b['id'])
+  self.assertEqual(new['source_url'],b['url'])
+  self.assertEqual(self.s.save_job_as_application(b['id']),new)
+  self.assertCountEqual(self.s.applications(),[old,new])
+
+ def test_normalizing_an_old_manual_job_keeps_its_application(self):
+  a=self.s.save_job(self.base)
+  with self.s.connect(True) as db:
+   db.execute('UPDATE jobs SET source_id=? WHERE id=?',('manual:old-tracking-hash',a['id']))
+  saved=self.s.save_job_as_application(a['id'])
+  submitted=self.s.save_application({'id':saved['id'],'status':'submitted'})
+  again=self.s.save_job({**self.base,'url':self.base['url']+'?utm_source=new'})
+  self.assertEqual(again['source_id'],a['source_id'])
+  self.assertEqual(self.s.save_job_as_application(again['id']),submitted)
+  self.assertEqual(self.s.applications(),[submitted])
 
 if __name__=='__main__':unittest.main()

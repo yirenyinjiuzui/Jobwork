@@ -27,19 +27,24 @@ export function inspectPage(mode, approved = [], expectedUrl = '', expectedSessi
   const changed = () => !session || session.document !== document || session.url !== location.href ||
     (session.focused && document.activeElement !== session.focused) ||
     document.visibilityState === 'hidden' || session.invalid || Date.now() > session.expires || session.observer.takeRecords().length > 0;
-  if (mode === 'fill' && (!expectedSession || session?.id !== expectedSession || changed())) {
+  if ((mode === 'fill' || mode === 'compare-kept') && (!expectedSession || session?.id !== expectedSession || changed())) {
     return reject('页面、岗位或预览已变更／失效，请重新扫描。');
   }
   const typeSet = new Set(['text', 'email', 'tel', 'url', 'textarea']);
   const plain = (s, max = 130) => String(s || '').trim().replace(/\s+/gu, ' ').slice(0, max);
-  const byRef = node => plain((node.getAttribute('aria-labelledby') || '').split(/\s+/u).filter(Boolean)
-    .map(id => document.getElementById(id)?.textContent || '').join(' '));
-  const labelsOf = node => plain(Array.from(node.labels || []).map(label => {
-    if (node.tagName !== 'SELECT' || !label.contains?.(node)) return label.innerText || label.textContent || '';
-    const copy = label.cloneNode(true);
-    copy.querySelectorAll('select').forEach(child => child.remove());
+  // A wrapping or ARIA-referenced label can contain a textarea's initial
+  // text or select options. Only the label itself belongs in scan metadata.
+  const labelText = el => {
+    const controls = 'input,textarea,select,[contenteditable]';
+    if (!el || el.matches?.(controls)) return '';
+    if (!el.querySelector?.(controls)) return el.innerText || el.textContent || '';
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll(controls).forEach(control => control.remove());
     return copy.textContent;
-  }).join(' '));
+  };
+  const byRef = node => plain((node.getAttribute('aria-labelledby') || '').split(/\s+/u).filter(Boolean)
+    .map(id => labelText(document.getElementById(id))).join(' '));
+  const labelsOf = node => plain(Array.from(node.labels || [], labelText).join(' '));
   const authContexts = new Set([...document.querySelectorAll('input[type="password"], input[autocomplete="one-time-code"], input[autocomplete="current-password"], input[autocomplete="new-password"]')]
     .filter(n => n.getClientRects().length > 0).map(n => n.form || document.body));
   if (authContexts.has(document.body)) return reject('网页显示登录或验证控件，请手动处理。');
@@ -53,7 +58,7 @@ export function inspectPage(mode, approved = [], expectedUrl = '', expectedSessi
     // Some layouts render an unbound label beside a single control.
     if (label?.tagName !== 'LABEL' || label.hasAttribute('for') || !isVisible(label) ||
         node.parentElement.querySelectorAll('input:not([type="hidden"]),textarea,select,[contenteditable]').length !== 1) return '';
-    return plain(label.innerText);
+    return plain(labelText(label));
   };
   const hints = node => {
     const label = labelsOf(node);
@@ -64,7 +69,7 @@ export function inspectPage(mode, approved = [], expectedUrl = '', expectedSessi
   function* groupsOf(node) {
     for (let group = node.closest(recordSelector); group; group = group.parentElement?.closest(recordSelector)) yield group;
   }
-  const groupTitle = group => plain(group.querySelector(':scope > legend')?.innerText ||
+  const groupTitle = group => plain(labelText(group.querySelector(':scope > legend')) ||
     group.getAttribute('aria-label') || byRef(group)).normalize('NFKC');
   const contextOf = node => {
     const form = node.form;
@@ -179,7 +184,7 @@ export function inspectPage(mode, approved = [], expectedUrl = '', expectedSessi
     // Reject form filling if these facts differ between preview and insertion.
     field.token = JSON.stringify([
       field.index, field.type, field.label, field.aria, field.adjacent, field.placeholder, field.name, field.id,
-      field.autocomplete, field.context, field.maxLength, !!field.auth, field.record, field.options,
+      field.autocomplete, field.context, field.maxLength, !!field.auth, field.record, field.options, field.hasValue,
     ]);
   }
 
@@ -203,6 +208,21 @@ export function inspectPage(mode, approved = [], expectedUrl = '', expectedSessi
     state.timer?.unref?.(); // Node test runner only; browser timers are numbers.
     globalThis[slot] = state;
     return { fields: Array.from(fieldMap.values(), row => row.field).slice(0, 120), url: location.href, host: location.host, session: state.id };
+  }
+  if (mode === 'compare-kept') {
+    const comparisons = [];
+    for (const {index, token, value} of approved) {
+      const row = fieldMap.get(index), bound = session.bindings.get(index);
+      const field = row?.field;
+      if (!bound || !field?.hasValue || bound.node !== row.node || bound.form !== row.node.form ||
+          bound.token !== token || field.token !== token || !field.record || field.record.uncertain ||
+          bound.record !== row.record?.element || field.auth || field.disabled || field.readonly ||
+          !['text', 'textarea', 'month'].includes(field.type) || typeof value !== 'string') {
+        return reject('目标字段或表单已变更，请重新扫描。');
+      }
+      comparisons.push({ index, same: row.node.value === value });
+    }
+    return { comparisons };
   }
   if (mode !== 'fill') return reject('未知操作。');
   const choices = approved.slice(0, 120);

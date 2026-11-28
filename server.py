@@ -22,7 +22,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import webbrowser
 
-from workbench import Store, HK, safe_url, normalized
+from workbench import Store, HK, ProfileConflict, safe_url, normalized
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = {
@@ -193,7 +193,7 @@ class Handler(BaseHTTPRequestHandler):
     def export(self):
         output=io.StringIO()
         writer=csv.writer(output)
-        fields=('company','title','requisition','location','career_type','status','deadline','interview_at','next_action','source_url','resume_label','updated_at','submitted_at')
+        fields=('company','title','requisition','location','career_type','status','deadline','interview_at','next_action','source_url','resume_label','updated_at','interview_reply_by','submitted_at')
         writer.writerow(fields)
         def safe_cell(value):
             value=str(value or '')
@@ -216,6 +216,8 @@ class Handler(BaseHTTPRequestHandler):
             result=self.mutate(urlsplit(self.path).path,data)
             if result is not None:
                 self.reply({'ok':True,**result})
+        except ProfileConflict as e:
+            self.reply({'error':str(e)},409)
         except sqlite3.IntegrityError:
             self.reply({'error':'已有相同公司、岗位或招聘源，请更新原记录'},409)
         except (ValueError, KeyError, TypeError, UnicodeError) as e:
@@ -252,7 +254,7 @@ class Handler(BaseHTTPRequestHandler):
             from resume_import import preview_resume
             return preview_resume(d.get('filename'),data_blob(d.get('content_base64'),5*1024*1024))
         if path=='/api/profile':
-            return {'profile':store.set_profile(d)}
+            return store.set_profile(d)
         if path=='/api/notice/preview':
             from tracker import parse_eml, parse_notice, parse_eml_notice, match_application
             mail=parse_eml(data_blob(d['eml_base64'],4*1024*1024)) if d.get('eml_base64') else {}
@@ -278,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
                 notice['requires_review']=True
                 notice['has_explicit_status']=False
                 notice['status']='waiting'
-                notice['deadline']=notice['interview_at']=notice['next_action']=''
+                notice['deadline']=notice['interview_at']=notice['interview_reply_by']=notice['next_action']=''
                 notice['warnings'].append(match['reason'])
                 notice['confidence']='low'
                 notice['completion']=notice['interview_cancelled']=False
@@ -298,11 +300,13 @@ class Handler(BaseHTTPRequestHandler):
                 selected=next((a for a in applications if a['id']==match.get('match_id')),None)
                 with store.connect() as db:
                     known=assessment_tasks.load(db,selected)
-                notice['assessment_completion_confirmation_required']=True
-                if not selected or assessment_tasks.key(notice.get('assessment_id')) not in known:
+                task=known.get(assessment_tasks.key(notice.get('assessment_id')))
+                if task and task.get('notice_at'):
+                    notice['assessment_completion_confirmation_required']=True
+                else:
                     notice['requires_review']=True
                     notice['has_explicit_status']=False
-                    notice['warnings'].append('完成回执无法唯一对应已知测评，仅复核留历史，不清除待办。')
+                    notice['warnings'].append('无法核实对应的测评编号或通知时间，仅复核留历史，不清除待办。')
             bound={**notice,'_preview_apps':{str(a['id']):a for a in applications}}
             return {'token':self.server.make_preview(bound),'notice':notice,'match':match}
         if path=='/api/notice/apply':
