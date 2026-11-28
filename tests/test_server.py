@@ -220,6 +220,22 @@ class API(unittest.TestCase):
             with self.assertRaisesRegex(InputError,'未找到'):
                 recognize_image({'image_base64':b64encode(b'\x89PNG\r\n\x1a\n').decode()})
 
+    def test_csv_exports_actual_submission_time_not_last_update(self):
+        import csv
+        from io import StringIO
+        values={'CSV-EXACT':'2026-11-01T10:00+08:00','CSV-DATE':'2026-11-02','CSV-UNKNOWN':''}
+        for req, when in values.items():
+            saved=self.post('/api/application',dict(company='Fictional CSV Timeline',title='Intern',requisition=req,
+                status='submitted',submitted_at=when))['application']
+            self.post('/api/application',dict(id=saved['id'],status='waiting',next_action='Updated later'))
+        with urlopen(self.url+'/api/export',timeout=3) as response:
+            reader=csv.DictReader(StringIO(response.read().decode('utf-8-sig')))
+            self.assertIn('submitted_at',reader.fieldnames)
+            rows={r['requisition']:r for r in reader if r['company']=='Fictional CSV Timeline'}
+        self.assertEqual({req:r['submitted_at'] for req,r in rows.items()},values)
+        self.assertTrue(all(r['status']=='waiting' and r['updated_at'] for r in rows.values()))
+        self.assertNotEqual(rows['CSV-EXACT']['updated_at'],rows['CSV-EXACT']['submitted_at'])
+
     def test_csv_escapes_formula_like_content(self):
         self.post('/api/application',dict(company='CSV Example',title='=1+1',requisition='CSV-1'))
         with urlopen(self.url+'/api/export',timeout=3) as r:
