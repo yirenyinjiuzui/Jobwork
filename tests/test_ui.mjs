@@ -546,6 +546,55 @@ async function main(){
   pageSearch.value='PAGE-0';pageSearch.handlers.input({target:pageSearch});
   assert(pageResults().textContent.includes('匹配 1 条记录'));
   assert(!nodes(pageResults()).some(n=>n.tagName==='button'&&n.textContent==='显示更多投递'));
+  // Large discovery result sets: both the main and the location-review lists remain reachable.
+  for(const confirmed of [true,false]){
+    for(let i=0;i<121;i++){
+      const title='Discovery Pagination '+(confirmed?'Confirmed ':'Review ')+String(i).padStart(3,'0');
+      const draft={company:'Fictional Discovery Pagination',title,requisition:(confirmed?'CONF-':'REVIEW-')+i,location:'Hong Kong',
+        career_type:'intern',description:confirmed?'The internship is based in Hong Kong.':'',url:'https://example.invalid/pagination/'+encodeURIComponent(title)};
+      await run(`request('/api/job',${JSON.stringify(draft)})`);
+    }
+  }
+  await run('refresh()');run("jobSearch='';jobRoute='';setTab('discovery');render()");
+  searchJobs('Discovery Pagination');
+  const paginationRoute=byid('job-filter-route');paginationRoute.value='hk';paginationRoute.handlers.change({target:paginationRoute});
+  const jobResults=()=>byid('job-results');
+  const reviewResults=()=>jobResults().children.find(n=>n.tagName==='section');
+  const confirmedResults=()=>jobResults().children.filter(n=>n!==reviewResults()).map(n=>n.textContent||'').join('');
+  assert(confirmedResults().includes('121 个岗位'));
+  assert(reviewResults().textContent.includes('121 个'));
+  assert(!confirmedResults().includes('Discovery Pagination Confirmed 000'));
+  assert(!reviewResults().textContent.includes('Discovery Pagination Review 000'));
+  await click('显示更多岗位');
+  assert(confirmedResults().includes('Discovery Pagination Confirmed 000'));
+  assert(!reviewResults().textContent.includes('Discovery Pagination Review 000'),'review list remains independently paginated');
+  await click('显示更多待复核岗位');
+  assert(reviewResults().textContent.includes('Discovery Pagination Review 000'));
+  assert(!nodes(jobResults()).some(n=>n.tagName==='button'&&n.textContent.startsWith('显示更多')));
+  await run('refresh()');
+  assert(confirmedResults().includes('Discovery Pagination Confirmed 000'),'refresh retains expanded results');
+  assert(reviewResults().textContent.includes('Discovery Pagination Review 000'));
+  searchJobs('Discovery Pagination CONF-0');
+  assert(jobResults().textContent.includes('Discovery Pagination Confirmed 000'));
+  assert(!reviewResults());
+  searchJobs('Discovery Pagination');
+  assert(!confirmedResults().includes('Discovery Pagination Confirmed 000'),'search reset restores initial page');
+  assert(!reviewResults().textContent.includes('Discovery Pagination Review 000'));
+  await click('显示更多待复核岗位');
+  const lastReviewRow=nodes(reviewResults()).find(n=>n.className==='row'&&n.textContent.includes('Discovery Pagination Review 000'));
+  await nodes(lastReviewRow).find(n=>n.tagName==='button'&&n.textContent==='存到投递台账').handlers.click();
+  const savedReview=(await run("request('/api/state')")).applications.find(a=>a.requisition==='REVIEW-0');
+  assert.equal(savedReview.title,'Discovery Pagination Review 000');
+  const allRegions=byid('job-filter-route');allRegions.value='';allRegions.handlers.change({target:allRegions});
+  assert(jobResults().textContent.includes('匹配 242 个岗位'));
+  assert(!jobResults().textContent.includes('Discovery Pagination Confirmed 000'),'changing route restores first page');
+  await click('显示更多岗位');await click('显示更多岗位');
+  assert(jobResults().textContent.includes('Discovery Pagination Confirmed 000'),'all-regions list can expand beyond two pages');
+  assert.equal(nodes(jobResults()).filter(n=>n.tagName==='button'&&n.textContent==='存到投递台账').length,242);
+  const openFilter=nodes(byid('content')).find(n=>n.tagName==='input'&&n.type==='checkbox');
+  openFilter.checked=false;openFilter.handlers.change();
+  assert(!jobResults().textContent.includes('Discovery Pagination Confirmed 000'),'open-only toggle restores first page');
+  console.log('DISCOVERY PAGINATION PASS: both lists show older jobs independently, refresh persists expanded results, search resets limits, older review row saves to SQLite.');
   console.log('UI+HTTP smoke passed: tabs, demo baseline and notification, filter/save, create, preview only until explicit confirmation, history, profile, resume label, draft review and fragment removal, board status change, actual calendar download, safe URL rejection.');
 }
 try{

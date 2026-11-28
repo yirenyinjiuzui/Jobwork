@@ -12,6 +12,8 @@ let pendingActions=0, pollActive=false, desktopAlerts=false;
 let captureDraft=null, applicationView='list';
 const applicationPageSize=150;
 let applicationLimit=applicationPageSize;
+const jobPageSize=120;
+let jobLimit=jobPageSize, jobReviewLimit=jobPageSize;
 let state=emptyState(), tab='dashboard', currentEdit=null, companyEdit=null, sourceEdit=null, search='', statusFilter='', jobSearch='', jobRoute='', openOnly=true, generation=0;
 let resumeSchema;
 let profileHasChanges=null;
@@ -300,10 +302,10 @@ function discovery(){
   const manualDetails=details('手动录入岗位',captureDraft?node('div','notice warn','扩展导入的草稿尚未保存，请核对公司、岗位、截止日期与网页地址。'):null,paragraph('BOSS、企业自建官网等未接入的来源，可以粘贴分享链接，也可由扩展提取公开职位信息。','meta'),manual);
   manualDetails.id='manual-job';manualDetails.open=Boolean(captureDraft);
   const routeField=field('job-filter','route','筛选范围',{kind:'select',value:jobRoute,options:[['','全部范围'],['hk','香港实习'],['cn','内地校招'],['intern','所有地区实习'],['graduate','所有地区校招']]});
-  qs('select',routeField).addEventListener('change',e=>{jobRoute=e.target.value;renderJobs(jobHolder);});
+  qs('select',routeField).addEventListener('change',e=>{jobRoute=e.target.value;resetJobLimits();renderJobs(jobHolder);});
   const searchField=field('job-filter','search','搜索岗位',{kind:'search',value:jobSearch,placeholder:'输入公司、岗位或地点'});
-  qs('input',searchField).addEventListener('input',e=>{jobSearch=e.target.value;renderJobs(jobHolder);});
-  const only=node('input');only.type='checkbox';only.checked=openOnly;only.addEventListener('change',()=>{openOnly=only.checked;renderJobs(jobHolder);});
+  qs('input',searchField).addEventListener('input',e=>{jobSearch=e.target.value;resetJobLimits();renderJobs(jobHolder);});
+  const only=node('input');only.type='checkbox';only.checked=openOnly;only.addEventListener('change',()=>{openOnly=only.checked;resetJobLimits();renderJobs(jobHolder);});
   const jobHolder=node('div');jobHolder.id='job-results';renderJobs(jobHolder);
   return [head('工作台 / 02','公司与岗位','收藏招聘入口，监测公开职位，把值得投的岗位放进台账。',[btn('检查全部招聘源',()=>mutate('/api/source/check',{},r=>checkMessage(r)),'primary')]),
     node('div','grid equal stack',card('目标公司',paragraph('添加公司官网和校招入口。','meta'),companyForm,companyRows.length?list(companyRows):empty('还没有目标公司。')),card('招聘来源',paragraph('仅检查公开招聘接口，不登录、不绕过站点限制。','meta'),sourceForm,sourceRows.length?list(sourceRows):empty('添加来源后再点「检查」。'))),
@@ -326,12 +328,14 @@ function recordSearch(query){
     return terms.every(term=>fields.some(value=>value.includes(term)));
   };
 }
+function resetJobLimits(){jobLimit=jobPageSize;jobReviewLimit=jobPageSize;}
 function renderJobs(target){
   const pool=state.jobs.filter(j=>!openOnly||j.active!==false&&j.active!==0)
     .filter(recordSearch(jobSearch));
   const rows=pool.filter(j=>jobRoute==='hk'?j.career_type==='intern'&&j.location_review?.hk_onsite===true:jobRoute==='cn'?j.career_type==='graduate'&&(['mainland','both'].includes(j.region)||!j.region&&mainlandCandidate(j.location)):!jobRoute||j.career_type===jobRoute);
   const review=jobRoute==='hk'?pool.filter(j=>j.career_type==='intern'&&j.location_review?.requires_review):[];
-  target.replaceChildren(shortMeta((jobRoute==='hk'?'正文支持香港实地实习 ':'匹配 ')+rows.length+' 个岗位'+(rows.length>120?' · 显示前 120 个':'')));
+  const visible=rows.slice(0,jobLimit), visibleReview=review.slice(0,jobReviewLimit);
+  target.replaceChildren(shortMeta((jobRoute==='hk'?'正文支持香港实地实习 ':'匹配 ')+rows.length+' 个岗位'+(visible.length<rows.length?' · 已显示 '+visible.length+' 个':'')));
   const renderRow=j=>row([node('strong','',j.title),' ',badge(typeLabels[j.career_type]||typeLabels.other),j.active===false||j.active===0?badge('已下架','closed'):null,
     shortMeta(j.company,'原地点：'+(j.location||'未标注'),j.requisition?'编号 '+j.requisition:null,j.deadline?'截止 '+niceDate(j.deadline):null),
     j.source_verification?paragraph(j.source_verification.message,'meta'):null,
@@ -340,9 +344,29 @@ function renderJobs(target){
     j.identity_review?paragraph(j.identity_review,'meta'):null,
     j.location_review?node('div','',badge(j.location_review.requires_review?'地点待复核':j.location_review.hk_onsite?'正文支持香港实习':'地点信息'),paragraph(j.location_review.reason,'meta'),details('地点证据与来源',list(j.location_review.evidence.map(e=>row(paragraph(e.source+'：'+e.quote,'meta')))))):null,
     j.eligibility?shortMeta('毕业要求：'+j.eligibility):null,j.start?shortMeta('到岗条件：'+j.start):null,j.description?details('查看摘要',paragraph(j.description.slice(0,600),'meta')):null],link('职位详情',j.url,'btn small'),btn('存到投递台账',()=>mutate('/api/job/save',{id:j.id},'已存入投递台账。'),'small'));
-  if(rows.length)target.append(list(rows.slice(0,120).map(renderRow)));
-  else target.append(empty('没有符合当前筛选的明确岗位。可查看待复核项或切回全部范围。'));
-  if(review.length)target.append(node('section','details',node('h3','','地点待复核（不计入香港实地实习）：'+review.length+' 个'),paragraph('仍可查看、手动核对和收藏；没有删除或覆盖原地点。','meta'),list(review.slice(0,120).map(renderRow))));
+  const more=(kind,label,visibleCount,total)=>{
+    if(visibleCount>=total)return null;
+    const button=btn(label,()=>{
+      if(kind==='jobs')jobLimit+=jobPageSize;
+      else jobReviewLimit+=jobPageSize;
+      renderJobs(target);
+      const next=qs('#'+kind+'-more',target);
+      const fallback=kind==='jobs'?target:qs('#job-review-results',target);
+      (next||fallback)?.focus({preventScroll:true});
+    },'small');
+    button.id=kind+'-more';
+    return node('div','actions',button);
+  };
+  target.tabIndex=-1;
+  if(rows.length){
+    target.append(list(visible.map(renderRow)));
+    const additional=more('jobs','显示更多岗位',visible.length,rows.length);
+    if(additional)target.append(additional);
+  }else target.append(empty('没有符合当前筛选的明确岗位。可查看待复核项或切回全部范围。'));
+  if(review.length){
+    const section=node('section','details',node('h3','','地点待复核（不计入香港实地实习）：'+review.length+' 个'+(visibleReview.length<review.length?' · 已显示 '+visibleReview.length+' 个':'')),paragraph('仍可查看、手动核对和收藏；没有删除或覆盖原地点。','meta'),list(visibleReview.map(renderRow)),more('review','显示更多待复核岗位',visibleReview.length,review.length));
+    section.id='job-review-results';section.tabIndex=-1;target.append(section);
+  }
 }
 
 function tracking(){
