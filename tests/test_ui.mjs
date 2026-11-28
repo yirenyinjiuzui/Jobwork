@@ -483,6 +483,30 @@ async function main(){
   const ackAfter=(await run("request('/api/state')")).applications.find(a=>a.id===ackApp.id);
   assert.equal(ackAfter.status,'assessment');assert.equal(ackAfter.deadline,ackApp.deadline);assert.equal(ackAfter.next_action,ackApp.next_action);
   console.log('RECEIPT LOOP PASS: pasted ordinary Test Developer acknowledgement previews original text, confirms history only, preserves assessment deadline/action.');
+  // Large synthetic ledger: the API returns all records, and older rows must remain reachable.
+  for(let i=0;i<151;i++)await run(`request('/api/application',{company:'Pagination Fixture',title:'Synthetic pagination ${String(i).padStart(3,'0')}',requisition:'PAGE-${i}',status:'submitted'})`);
+  await run('refresh()');run("setTab('tracking');render()");
+  const pageSearch=byid('app-filter-search');
+  pageSearch.value='Pagination Fixture';pageSearch.handlers.input({target:pageSearch});
+  const pageResults=()=>byid('application-results');
+  assert(pageResults().textContent.includes('匹配 151 条记录'));
+  assert(!pageResults().textContent.includes('Synthetic pagination 000'));
+  await click('显示更多投递');
+  assert(pageResults().textContent.includes('Synthetic pagination 000'),'oldest matching application is reachable');
+  assert(!nodes(pageResults()).some(n=>n.tagName==='button'&&n.textContent==='显示更多投递'));
+  await click('看板');
+  assert(pageResults().textContent.includes('Synthetic pagination 000'),'expanded view is retained on switching');
+  const pageStatus=byid('app-filter-status');
+  pageStatus.value='waiting';pageStatus.handlers.change({target:pageStatus});
+  assert(pageResults().textContent.includes('匹配 0 条记录'));
+  pageStatus.value='submitted';pageStatus.handlers.change({target:pageStatus});
+  assert(!pageResults().textContent.includes('Synthetic pagination 000'),'changing filters resets the visible limit');
+  await click('显示更多投递');
+  assert(pageResults().textContent.includes('Synthetic pagination 000'),'board can load the remaining records');
+  assert.equal(nodes(pageResults()).filter(n=>n.className==='board-item').length,151);
+  pageSearch.value='PAGE-0';pageSearch.handlers.input({target:pageSearch});
+  assert(pageResults().textContent.includes('匹配 1 条记录'));
+  assert(!nodes(pageResults()).some(n=>n.tagName==='button'&&n.textContent==='显示更多投递'));
   console.log('UI+HTTP smoke passed: tabs, demo baseline and notification, filter/save, create, preview only until explicit confirmation, history, profile, resume label, draft review and fragment removal, board status change, actual calendar download, safe URL rejection.');
 }
 try{
