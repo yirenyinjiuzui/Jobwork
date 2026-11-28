@@ -191,7 +191,9 @@ def classify_region(location):
     if not value:
         return "unknown"
     is_hk = bool(re.search(r"\bhong\s*kong\b|\bhksar\b|\bhk\b|香港|九龙|九龍|\bkowloon\b|新界", value))
-    is_cn = bool(re.search(r"(?<!hong kong, )\b(?:mainland china|shenzhen|beijing|shanghai|guangzhou|hangzhou|chengdu|wuhan|nanjing|suzhou|xi'an|xian|zhuhai|dongguan|chongqing|xiamen|changsha|hefei|fuzhou|tianjin|qingdao|ningbo)\b|中国大陆|中國大陸|内地|內地|深圳|北京|上海|广州|廣州|杭州|成都|武汉|武漢|南京|苏州|蘇州|西安|珠海|东莞|東莞|重庆|重慶|厦门|廈門|长沙|長沙|合肥|福州|天津|青岛|青島|宁波|寧波", value))
+    # A bare China country suffix is not a mainland city; an explicit mainland
+    # place remains evidence even immediately after "Hong Kong, ".
+    is_cn = bool(re.search(r"\b(?:mainland china|shenzhen|beijing|shanghai|guangzhou|hangzhou|chengdu|wuhan|nanjing|suzhou|xi'an|xian|zhuhai|dongguan|chongqing|xiamen|changsha|hefei|fuzhou|tianjin|qingdao|ningbo)\b|中国大陆|中國大陸|内地|內地|深圳|北京|上海|广州|廣州|杭州|成都|武汉|武漢|南京|苏州|蘇州|西安|珠海|东莞|東莞|重庆|重慶|厦门|廈門|长沙|長沙|合肥|福州|天津|青岛|青島|宁波|寧波", value))
     if is_hk and is_cn:
         return "both"
     if is_hk:
